@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Streamlit secrets (CRITICAL: Never commit this file)
+.streamlit/secrets.toml
+
+# Virtual environments
+venv/
+env/
+.env
+
+# MacOS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+
+# Local data
+*.csv
+*.xlsx
