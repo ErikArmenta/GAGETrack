@@ -378,116 +378,141 @@ def render_msa():
     
     # Perform analysis
     if df_measurements is not None and len(df_measurements) > 0:
-        try:
-            # Calculate Gage R&R
-            results = calculate_gage_rr_anova(df_measurements)
-            
-            st.markdown("---")
-            st.markdown("## 📈 Resultados del Análisis")
-            
-            # Summary metrics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                grr_pct = results['percentages']['%GRR']
-                color = "green" if grr_pct < 10 else "orange" if grr_pct < 30 else "red"
-                st.metric("% GRR", f"{grr_pct:.2f}%")
-                if grr_pct < 10:
-                    st.success("✅ Aceptable")
-                elif grr_pct < 30:
-                    st.warning("⚠️ Marginal")
-                else:
-                    st.error("❌ Inaceptable")
-            
-            with col2:
-                st.metric("% EV (Repetibilidad)", f"{results['percentages']['%EV']:.2f}%")
-            
-            with col3:
-                st.metric("% AV (Reproducibilidad)", f"{results['percentages']['%AV']:.2f}%")
-            
-            with col4:
-                st.metric("ndc (Categorías)", results['ndc'])
-                if results['ndc'] >= 5:
-                    st.success("✅ Adecuado")
-                else:
-                    st.warning("⚠️ Insuficiente")
-            
-            # Variance components table
-            st.markdown("### Componentes de Varianza")
-            
-            variance_df = pd.DataFrame({
-                'Componente': list(results['study_var'].keys()),
-                'Desviación Estándar (σ)': [f"{v:.6f}" for v in results['std_dev'].values()],
-                'Variación del Estudio (5.15σ)': [f"{v:.6f}" for v in results['study_var'].values()],
-                '% Contribución': [
-                    f"{results['percentages']['%EV']:.2f}%",
-                    f"{results['percentages']['%AV']:.2f}%",
-                    f"{results['percentages']['%GRR']:.2f}%",
-                    f"{results['percentages']['%PV']:.2f}%",
-                    "100.00%"
-                ]
-            })
-            
-            st.dataframe(variance_df, use_container_width=True, hide_index=True)
-            
-            # Charts
-            st.markdown("### 📊 Gráficas de Análisis")
-            
-            tab1, tab2, tab3, tab4 = st.tabs([
-                "Componentes de Varianza",
-                "X-bar & R Charts",
-                "Interacción Parte × Operador",
-                "Distribución por Operador"
-            ])
-            
-            with tab1:
-                fig_components = create_components_chart(results)
-                st.plotly_chart(fig_components, use_container_width=True)
-            
-            with tab2:
-                fig_xbar_r = create_xbar_r_charts(df_measurements)
-                st.plotly_chart(fig_xbar_r, use_container_width=True)
-            
-            with tab3:
-                fig_interaction = create_interaction_plot(df_measurements)
-                st.plotly_chart(fig_interaction, use_container_width=True)
-            
-            with tab4:
-                fig_boxplot = create_boxplot_by_operator(df_measurements)
-                st.plotly_chart(fig_boxplot, use_container_width=True)
-            
-            # ANOVA Table
-            with st.expander("📋 Ver Tabla ANOVA Completa"):
-                st.dataframe(results['anova_table'], use_container_width=True)
-            
-            # Export results
-            st.markdown("---")
-            st.markdown("### 📥 Exportar Resultados")
-            
-            # Create summary report
-            report_data = {
-                'Métrica': ['%GRR', '%EV', '%AV', '%PV', 'ndc'],
-                'Valor': [
-                    f"{results['percentages']['%GRR']:.2f}%",
-                    f"{results['percentages']['%EV']:.2f}%",
-                    f"{results['percentages']['%AV']:.2f}%",
-                    f"{results['percentages']['%PV']:.2f}%",
-                    results['ndc']
-                ]
-            }
-            report_df = pd.DataFrame(report_data)
-            
-            csv = report_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Descargar Resumen (CSV)",
-                data=csv,
-                file_name=f"msa_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-            
-        except Exception as e:
-            st.error(f"❌ Error en el análisis: {str(e)}")
-            st.exception(e)
+        # Normalize columns (handle Spanish/English variations)
+        df_measurements.columns = df_measurements.columns.str.strip()
+        
+        # Mapping variations to standard
+        col_map = {}
+        for col in df_measurements.columns:
+            col_lower = col.lower()
+            if col_lower in ['parte', 'part', 'id part', 'id parte']:
+                col_map[col] = 'Part'
+            elif col_lower in ['operador', 'operator', 'appraiser', 'analista']:
+                col_map[col] = 'Operator'
+            elif col_lower in ['medicion', 'medición', 'measurement', 'value', 'valor', 'reading', 'lectura']:
+                col_map[col] = 'Measurement'
+        
+        if col_map:
+            df_measurements = df_measurements.rename(columns=col_map)
+        
+        # Verify required columns exist
+        required_cols = ['Part', 'Operator', 'Measurement']
+        missing_cols = [c for c in required_cols if c not in df_measurements.columns]
+        
+        if missing_cols:
+            st.error(f"❌ Faltan columnas requeridas o no se pudieron identificar: {', '.join(missing_cols)}")
+            st.info("Asegúrate de que tu CSV tenga columnas como: 'Parte', 'Operador', 'Medición'")
+        else:
+            try:
+                # Calculate Gage R&R
+                results = calculate_gage_rr_anova(df_measurements)
+                
+                st.markdown("---")
+                st.markdown("## 📈 Resultados del Análisis")
+                
+                # Summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    grr_pct = results['percentages']['%GRR']
+                    color = "green" if grr_pct < 10 else "orange" if grr_pct < 30 else "red"
+                    st.metric("% GRR", f"{grr_pct:.2f}%")
+                    if grr_pct < 10:
+                        st.success("✅ Aceptable")
+                    elif grr_pct < 30:
+                        st.warning("⚠️ Marginal")
+                    else:
+                        st.error("❌ Inaceptable")
+                
+                with col2:
+                    st.metric("% EV (Repetibilidad)", f"{results['percentages']['%EV']:.2f}%")
+                
+                with col3:
+                    st.metric("% AV (Reproducibilidad)", f"{results['percentages']['%AV']:.2f}%")
+                
+                with col4:
+                    st.metric("ndc (Categorías)", results['ndc'])
+                    if results['ndc'] >= 5:
+                        st.success("✅ Adecuado")
+                    else:
+                        st.warning("⚠️ Insuficiente")
+                
+                # Variance components table
+                st.markdown("### Componentes de Varianza")
+                
+                variance_df = pd.DataFrame({
+                    'Componente': list(results['study_var'].keys()),
+                    'Desviación Estándar (σ)': [f"{v:.6f}" for v in results['std_dev'].values()],
+                    'Variación del Estudio (5.15σ)': [f"{v:.6f}" for v in results['study_var'].values()],
+                    '% Contribución': [
+                        f"{results['percentages']['%EV']:.2f}%",
+                        f"{results['percentages']['%AV']:.2f}%",
+                        f"{results['percentages']['%GRR']:.2f}%",
+                        f"{results['percentages']['%PV']:.2f}%",
+                        "100.00%"
+                    ]
+                })
+                
+                st.dataframe(variance_df, use_container_width=True, hide_index=True)
+                
+                # Charts
+                st.markdown("### 📊 Gráficas de Análisis")
+                
+                tab1, tab2, tab3, tab4 = st.tabs([
+                    "Componentes de Varianza",
+                    "X-bar & R Charts",
+                    "Interacción Parte × Operador",
+                    "Distribución por Operador"
+                ])
+                
+                with tab1:
+                    fig_components = create_components_chart(results)
+                    st.plotly_chart(fig_components, use_container_width=True)
+                
+                with tab2:
+                    fig_xbar_r = create_xbar_r_charts(df_measurements)
+                    st.plotly_chart(fig_xbar_r, use_container_width=True)
+                
+                with tab3:
+                    fig_interaction = create_interaction_plot(df_measurements)
+                    st.plotly_chart(fig_interaction, use_container_width=True)
+                
+                with tab4:
+                    fig_boxplot = create_boxplot_by_operator(df_measurements)
+                    st.plotly_chart(fig_boxplot, use_container_width=True)
+                
+                # ANOVA Table
+                with st.expander("📋 Ver Tabla ANOVA Completa"):
+                    st.dataframe(results['anova_table'], use_container_width=True)
+                
+                # Export results
+                st.markdown("---")
+                st.markdown("### 📥 Exportar Resultados")
+                
+                # Create summary report
+                report_data = {
+                    'Métrica': ['%GRR', '%EV', '%AV', '%PV', 'ndc'],
+                    'Valor': [
+                        f"{results['percentages']['%GRR']:.2f}%",
+                        f"{results['percentages']['%EV']:.2f}%",
+                        f"{results['percentages']['%AV']:.2f}%",
+                        f"{results['percentages']['%PV']:.2f}%",
+                        results['ndc']
+                    ]
+                }
+                report_df = pd.DataFrame(report_data)
+                
+                csv = report_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Descargar Resumen (CSV)",
+                    data=csv,
+                    file_name=f"msa_results_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+                
+            except Exception as e:
+                st.error(f"❌ Error en el análisis: {str(e)}")
+                st.exception(e)
 
 if __name__ == "__main__":
     render_msa()
