@@ -79,7 +79,6 @@ def _pdf_download_button(meta: dict, results: dict, study_type: str, suffix: str
     """Render a direct st.download_button that generates PDF on click."""
     from modules.reports import generate_msa_report
     gage_id = meta.get("gage_id", "N/A")
-    # Generate PDF buffer eagerly — small enough to be fast
     buf = generate_msa_report(meta, results, study_type)
     fname = f"MSA_{study_type}_{gage_id}_{datetime.now().strftime('%Y%m%d%H%M')}.pdf"
     st.download_button(
@@ -93,11 +92,7 @@ def _pdf_download_button(meta: dict, results: dict, study_type: str, suffix: str
 
 
 def _save_and_pdf_row(meta: dict, results: dict, study_type: str,
-                       table: str, records: list, suffix: str = ""):
-    """
-    Render Save-to-DB button + PDF download button side by side.
-    Uses session_state to track save status.
-    """
+                        table: str, records: list, suffix: str = ""):
     col1, col2 = st.columns(2)
     saved_key = f"saved_{study_type}_{suffix}"
 
@@ -140,7 +135,7 @@ def calculate_gage_rr_anova(df, parts_col='Part', operators_col='Operator', meas
     MS_part     = anova_table.loc[f'C({parts_col})',                   'sum_sq'] / anova_table.loc[f'C({parts_col})',                   'df']
     MS_operator = anova_table.loc[f'C({operators_col})',               'sum_sq'] / anova_table.loc[f'C({operators_col})',               'df']
     MS_inter    = anova_table.loc[f'C({parts_col}):C({operators_col})','sum_sq'] / anova_table.loc[f'C({parts_col}):C({operators_col})','df']
-    MS_error    = anova_table.loc['Residual',                          'sum_sq'] / anova_table.loc['Residual',                          'df']
+    MS_error    = anova_table.loc['Residual',                         'sum_sq'] / anova_table.loc['Residual',                         'df']
 
     var_EV   = max(0, MS_error)
     var_AV   = max(0, (MS_operator - MS_inter) / (n_parts * n_trials))
@@ -196,19 +191,19 @@ def render_grr_tab():
             col_map = {}
             for c in df_csv.columns:
                 cl = c.lower().strip()
-                if cl in ['parte','part']:              col_map[c] = 'Part'
-                elif cl in ['operador','operator']:     col_map[c] = 'Operator'
+                if cl in ['parte','part']:                               col_map[c] = 'Part'
+                elif cl in ['operador','operator']:                     col_map[c] = 'Operator'
                 elif cl in ['medicion','medición','measurement','valor']: col_map[c] = 'Measurement'
             df_csv = df_csv.rename(columns=col_map)
             st.dataframe(df_csv.head())
             if st.button("🔬 Analizar GRR", type="primary", key="grr_analyze_csv_btn"):
                 _run_grr_analysis(df_csv, gage_id, inst_uuid)
 
-    # ── Show persistent results ──
     if "grr_results" in st.session_state:
         _render_grr_results(st.session_state["grr_results"],
                             st.session_state.get("grr_df", pd.DataFrame()),
-                            gage_id, inst_uuid)
+                            st.session_state.get("grr_gage_id_val", gage_id), 
+                            st.session_state.get("grr_uuid_val", inst_uuid))
 
 
 def _run_grr_analysis(df_meas, gage_id, inst_uuid):
@@ -220,8 +215,8 @@ def _run_grr_analysis(df_meas, gage_id, inst_uuid):
         results = calculate_gage_rr_anova(df_meas)
         st.session_state["grr_results"] = results
         st.session_state["grr_df"]      = df_meas
-        st.session_state["grr_gage_id"] = gage_id
-        st.session_state["grr_uuid"]    = inst_uuid
+        st.session_state["grr_gage_id_val"] = gage_id
+        st.session_state["grr_uuid_val"]    = inst_uuid
     except Exception as e:
         st.error(f"Error en análisis: {e}")
         st.exception(e)
@@ -246,12 +241,11 @@ def _render_grr_results(results, df_meas, gage_id, inst_uuid):
         if ndc >= 5: st.success("✅ Adecuado")
         else: st.warning("⚠️ Insuficiente")
 
-    # Sorted table
     sort_by   = st.radio("Ordenar por", ["%GRR","%EV","%AV","%PV"], horizontal=True, key="grr_sort")
     sort_desc = st.checkbox("Mayor a menor", value=True, key="grr_sort_desc")
     result_df = pd.DataFrame({
-        'Componente':          ['Repetibilidad (EV)','Reproducibilidad (AV)','Gage R&R (GRR)','Variación Parte (PV)'],
-        'σ':                   [f"{results['std_dev'][k]:.6f}" for k in ['EV','AV','GRR','PV']],
+        'Componente':           ['Repetibilidad (EV)','Reproducibilidad (AV)','Gage R&R (GRR)','Variación Parte (PV)'],
+        'σ':                    [f"{results['std_dev'][k]:.6f}" for k in ['EV','AV','GRR','PV']],
         'Variación del Estudio':[f"{results['study_var'][k]:.6f}" for k in ['EV','AV','GRR','PV']],
         '%EV':  [pcts['%EV'],0,0,0],
         '%AV':  [0,pcts['%AV'],0,0],
@@ -261,7 +255,6 @@ def _render_grr_results(results, df_meas, gage_id, inst_uuid):
     result_df = result_df.sort_values(sort_by, ascending=not sort_desc)
     st.dataframe(result_df[['Componente','σ','Variación del Estudio']], use_container_width=True, hide_index=True)
 
-    # Charts
     t1, t2, t3, t4 = st.tabs(["Componentes","X-bar & R","Interacción","Distribución por Operador"])
     with t1:
         fig = go.Figure(go.Bar(
@@ -282,7 +275,6 @@ def _render_grr_results(results, df_meas, gage_id, inst_uuid):
     with t4:
         if not df_meas.empty: _boxplot_by_operator(df_meas)
 
-    # ── Persist save/download OUTSIDE the analyze button block ──
     st.markdown("---")
     meta = _study_meta_form("GRR", gage_id or "N/A", inst_uuid or "", "grr_meta")
     flat = {**pcts, "ndc": results["ndc"],
@@ -299,10 +291,8 @@ def _render_grr_results(results, df_meas, gage_id, inst_uuid):
 
 
 def _natural_sort_parts(parts):
-    """Sort part labels naturally: P1, P2, ..., P10 instead of P1, P10, P2"""
     import re
     def _key(s):
-        # Split into text and numeric segments for natural ordering
         return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', str(s))]
     return sorted(parts, key=_key)
 
@@ -311,7 +301,6 @@ def _xbar_r_chart(df):
     grp = df.groupby(["Part","Operator"])["Measurement"].agg(["mean", lambda x: x.max()-x.min()])
     grp.columns = ["Mean","Range"]
     grp = grp.reset_index()
-    # Natural sort parts
     sorted_parts = _natural_sort_parts(df["Part"].unique())
     grp["Part"] = pd.Categorical(grp["Part"], categories=sorted_parts, ordered=True)
     grp = grp.sort_values("Part")
@@ -320,10 +309,10 @@ def _xbar_r_chart(df):
     colors_list = px.colors.qualitative.Set2
     for i, op in enumerate(sorted(df["Operator"].unique())):
         d = grp[grp["Operator"]==op]
-        fig.add_trace(go.Scatter(x=d["Part"].astype(str), y=d["Mean"], mode="lines+markers",
+        fig.add_trace(go.Scatter(x=d["Part"].astype(str), y=d["Mean"], mode="markers+lines",
                                  name=op, line=dict(color=colors_list[i%len(colors_list)]),
                                  legendgroup=op), row=1, col=1)
-        fig.add_trace(go.Scatter(x=d["Part"].astype(str), y=d["Range"], mode="lines+markers",
+        fig.add_trace(go.Scatter(x=d["Part"].astype(str), y=d["Range"], mode="markers+lines",
                                  name=op, line=dict(color=colors_list[i%len(colors_list)]),
                                  legendgroup=op, showlegend=False), row=2, col=1)
     grand_mean = grp["Mean"].mean(); grand_r = grp["Range"].mean()
@@ -337,61 +326,31 @@ def _xbar_r_chart(df):
 
 
 def _boxplot_by_operator(df):
-    """Box plot of measurements per operator and per part — AIAG MSA style"""
     colors_list = px.colors.qualitative.Set2
-
-    # ── Box by Operator ──
     fig1 = go.Figure()
     for i, op in enumerate(sorted(df["Operator"].unique())):
         d = df[df["Operator"] == op]["Measurement"]
-        fig1.add_trace(go.Box(
-            y=d, name=op,
-            marker_color=colors_list[i % len(colors_list)],
-            boxmean=True,          # shows mean marker
-            boxpoints="all",       # show all points
-            jitter=0.3,
-            pointpos=-1.8,
-        ))
-    fig1.update_layout(
-        title="Distribución por Operador",
-        yaxis_title="Medición",
-        xaxis_title="Operador",
-        height=420,
-        showlegend=False,
-    )
+        fig1.add_trace(go.Box(y=d, name=op, marker_color=colors_list[i % len(colors_list)],
+                            boxmean=True, boxpoints="all", jitter=0.3))
+    fig1.update_layout(title="Distribución por Operador", height=420, showlegend=False)
     st.plotly_chart(fig1, use_container_width=True)
 
-    # ── Box by Part (natural sort) ──
     sorted_parts = _natural_sort_parts(df["Part"].unique())
     fig2 = go.Figure()
     for i, part in enumerate(sorted_parts):
         d = df[df["Part"] == part]["Measurement"]
-        fig2.add_trace(go.Box(
-            y=d, name=str(part),
-            marker_color=colors_list[i % len(colors_list)],
-            boxmean=True,
-            boxpoints="all",
-            jitter=0.3,
-            pointpos=-1.8,
-        ))
-    fig2.update_layout(
-        title="Distribución por Pieza",
-        yaxis_title="Medición",
-        xaxis_title="Pieza",
-        height=420,
-        showlegend=False,
-    )
+        fig2.add_trace(go.Box(y=d, name=str(part), marker_color=colors_list[i % len(colors_list)],
+                            boxmean=True, boxpoints="all", jitter=0.3))
+    fig2.update_layout(title="Distribución por Pieza", height=420, showlegend=False)
     st.plotly_chart(fig2, use_container_width=True)
 
 
 def _interaction_chart(df):
     inter = df.groupby(["Part","Operator"])["Measurement"].mean().reset_index()
-    # Natural sort
     sorted_parts = _natural_sort_parts(df["Part"].unique())
     inter["Part"] = pd.Categorical(inter["Part"], categories=sorted_parts, ordered=True)
     inter = inter.sort_values("Part")
-    fig = px.line(inter, x="Part", y="Measurement", color="Operator",
-                  markers=True, title="Interacción Parte × Operador")
+    fig = px.line(inter, x="Part", y="Measurement", color="Operator", markers=True, title="Interacción Parte × Operador")
     fig.update_layout(height=450)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -438,18 +397,18 @@ def render_stability_tab():
             "means": means.tolist(),"ranges": ranges.tolist(),
             "sg_idx": list(means.index),
         }
-        st.session_state["stab_df"]    = df_stab.copy()
-        st.session_state["stab_ref"]   = reference_val
-        st.session_state["stab_gage"]  = gage_id
-        st.session_state["stab_uuid"]  = inst_uuid
-        st.session_state["stab_nread"] = n_readings
+        st.session_state["stab_df_val"]    = df_stab.copy()
+        st.session_state["stab_ref_val"]   = reference_val
+        st.session_state["stab_gage_id_val"]  = gage_id
+        st.session_state["stab_uuid_val"]  = inst_uuid
+        st.session_state["stab_nread_val"] = n_readings
 
     if "stab_results" in st.session_state:
-        r       = st.session_state["stab_results"]
-        sg_idx  = r["sg_idx"]
-        means   = r["means"]
-        rng_vals= r["ranges"]
-        ref_val = st.session_state["stab_ref"]
+        r        = st.session_state["stab_results"]
+        sg_idx   = r["sg_idx"]
+        means    = r["means"]
+        rng_vals = r["ranges"]
+        ref_val  = st.session_state.get("stab_ref_val", 0.0)
 
         fig = make_subplots(rows=2, cols=1, subplot_titles=("Gráfica X-bar (Estabilidad)","Gráfica R"))
         fig.add_trace(go.Scatter(x=sg_idx, y=means, mode="lines+markers", name="Promedio",
@@ -472,12 +431,12 @@ def render_stability_tab():
         c4.metric("Sesgo promedio", f"{r['bias_mean']:.4f}")
 
         st.markdown("---")
-        meta = _study_meta_form("Stability", st.session_state["stab_gage"] or "N/A",
-                                st.session_state["stab_uuid"] or "", "stab_meta")
+        meta = _study_meta_form("Stability", st.session_state.get("stab_gage_id_val", "N/A"),
+                                st.session_state.get("stab_uuid_val", ""), "stab_meta")
         records = [{"study_id":"__PH__","subgroup":int(row["Subgrupo"]),
                     "measurement":float(row["Medición"]),
-                    "reference_value":float(st.session_state["stab_ref"])}
-                   for _,row in st.session_state["stab_df"].iterrows()]
+                    "reference_value":float(st.session_state.get("stab_ref_val", 0))}
+                    for _,row in st.session_state.get("stab_df_val", pd.DataFrame()).iterrows()]
         flat_r = {k:round(v,6) for k,v in r.items() if isinstance(v,(int,float))}
         _save_and_pdf_row(meta, flat_r, "Stability", "gt_msa_stability_data", records, "stab")
 
@@ -503,10 +462,7 @@ def render_linearity_tab():
     if st.button("🔬 Analizar Linealidad", type="primary", key="lin_analyze"):
         df_l = df_lin.copy()
         df_l["Sesgo"] = df_l["Medición"] - df_l["Referencia"]
-        part_stats = df_l.groupby("Pieza").agg(
-            Referencia=("Referencia","first"),
-            Sesgo_Promedio=("Sesgo","mean"),
-        ).reset_index()
+        part_stats = df_l.groupby("Pieza").agg(Referencia=("Referencia","first"), Sesgo_Promedio=("Sesgo","mean")).reset_index()
         refs   = part_stats["Referencia"].values
         biases = part_stats["Sesgo_Promedio"].values
         slope, intercept, r_val, p_val, _ = stats.linregress(refs, biases)
@@ -517,9 +473,9 @@ def render_linearity_tab():
             "p_value":p_val,"linearity":linearity,
             "refs":refs.tolist(),"biases":biases.tolist(),
         }
-        st.session_state["lin_df"]    = df_lin.copy()
-        st.session_state["lin_gage"]  = gage_id
-        st.session_state["lin_uuid"]  = inst_uuid
+        st.session_state["lin_df_val"]    = df_lin.copy()
+        st.session_state["lin_gage_id_val"]  = gage_id
+        st.session_state["lin_uuid_val"]  = inst_uuid
 
     if "lin_results" in st.session_state:
         r    = st.session_state["lin_results"]
@@ -528,14 +484,10 @@ def render_linearity_tab():
         y_line = r["slope"]*x_line + r["intercept"]
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=refs, y=biases, mode="markers", name="Sesgo promedio",
-                                 marker=dict(size=12, color="#2a5298")))
-        fig.add_trace(go.Scatter(x=x_line.tolist(), y=y_line.tolist(), mode="lines",
-                                 name=f"Regresión (R²={r['r_squared']:.4f})",
-                                 line=dict(color="#e74c3c",width=2)))
+        fig.add_trace(go.Scatter(x=refs, y=biases, mode="markers", name="Sesgo promedio", marker=dict(size=12, color="#2a5298")))
+        fig.add_trace(go.Scatter(x=x_line.tolist(), y=y_line.tolist(), mode="lines", name=f"Regresión (R²={r['r_squared']:.4f})", line=dict(color="#e74c3c",width=2)))
         fig.add_hline(y=0, line_dash="dash", line_color="green")
-        fig.update_layout(title="Linealidad: Sesgo vs. Referencia",
-                          xaxis_title="Referencia", yaxis_title="Sesgo", height=420)
+        fig.update_layout(title="Linealidad: Sesgo vs. Referencia", xaxis_title="Referencia", yaxis_title="Sesgo", height=420)
         st.plotly_chart(fig, use_container_width=True)
 
         c1,c2,c3,c4 = st.columns(4)
@@ -545,12 +497,12 @@ def render_linearity_tab():
         c4.metric("p-valor",        f"{r['p_value']:.4f}")
 
         st.markdown("---")
-        meta = _study_meta_form("Linearity", st.session_state["lin_gage"] or "N/A",
-                                st.session_state["lin_uuid"] or "", "lin_meta")
+        meta = _study_meta_form("Linearity", st.session_state.get("lin_gage_id_val", "N/A"),
+                                st.session_state.get("lin_uuid_val", ""), "lin_meta")
         records = [{"study_id":"__PH__","part_id":str(row["Pieza"]),
                     "reference_value":float(row["Referencia"]),
                     "measured_value":float(row["Medición"]),"trial":int(row["Réplica"])}
-                   for _,row in st.session_state["lin_df"].iterrows()]
+                    for _,row in st.session_state.get("lin_df_val", pd.DataFrame()).iterrows()]
         flat_r = {k:round(v,6) for k,v in r.items() if isinstance(v,(int,float))}
         _save_and_pdf_row(meta, flat_r, "Linearity", "gt_msa_linearity_data", records, "lin")
 
@@ -588,10 +540,10 @@ def render_bias_tab():
             "p_value":p_value,"sd":sd,"n":n,
             "bias_vals":bias_vals.tolist(),"measurements":measurements.tolist(),
         }
-        st.session_state["bias_df"]        = df_bias.copy()
+        st.session_state["bias_df_val"]        = df_bias.copy()
         st.session_state["bias_ref_val"]   = reference_val
-        st.session_state["bias_gage_id"]   = gage_id
-        st.session_state["bias_uuid"]      = inst_uuid
+        st.session_state["bias_gage_id_val"]   = gage_id
+        st.session_state["bias_uuid_val"]      = inst_uuid
 
     if "bias_results" in st.session_state:
         r    = st.session_state["bias_results"]
@@ -600,8 +552,7 @@ def render_bias_tab():
         fig  = go.Figure()
         fig.add_trace(go.Histogram(x=bv, name="Sesgo", marker_color="#2a5298", opacity=0.7, nbinsx=15))
         fig.add_vline(x=0,    line_dash="solid", line_color="green")
-        fig.add_vline(x=bias, line_dash="dash",  line_color="red",
-                      annotation_text=f"Bias={bias:.4f}")
+        fig.add_vline(x=bias, line_dash="dash",  line_color="red", annotation_text=f"Bias={bias:.4f}")
         fig.update_layout(title="Distribución del Sesgo", xaxis_title="Sesgo", height=380)
         st.plotly_chart(fig, use_container_width=True)
 
@@ -611,14 +562,14 @@ def render_bias_tab():
         c3.metric("t estadístico", f"{r['t_stat']:.4f}")
         c4.metric("p-valor", f"{r['p_value']:.4f}")
         if r["p_value"] < 0.05: st.error("❌ Sesgo estadísticamente significativo")
-        else:                    st.success("✅ Sesgo no significativo")
+        else:                   st.success("✅ Sesgo no significativo")
 
         st.markdown("---")
-        meta = _study_meta_form("Bias", st.session_state["bias_gage_id"] or "N/A",
-                                st.session_state["bias_uuid"] or "", "bias_meta")
-        records = [{"study_id":"__PH__","reference_value":float(st.session_state["bias_ref_val"]),
+        meta = _study_meta_form("Bias", st.session_state.get("bias_gage_id_val", "N/A"),
+                                st.session_state.get("bias_uuid_val", ""), "bias_meta")
+        records = [{"study_id":"__PH__","reference_value":float(st.session_state.get("bias_ref_val", 0)),
                     "measured_value":float(m),"trial":i+1}
-                   for i,m in enumerate(r["measurements"])]
+                    for i,m in enumerate(r["measurements"])]
         flat_r = {k:round(v,6) for k,v in r.items() if isinstance(v,(int,float))}
         _save_and_pdf_row(meta, flat_r, "Bias", "gt_msa_bias_data", records, "bias")
 
@@ -665,11 +616,11 @@ def render_kappa_tab():
             agreements[f"Evaluador {a}"] = round((vals==ref).mean()*100, 2)
 
         st.session_state["kappa_results"] = {"kappas": kappas, "agreements": agreements}
-        st.session_state["kappa_df"]      = df_kappa.copy()
-        st.session_state["kappa_gage"]    = gage_id
-        st.session_state["kappa_uuid"]    = inst_uuid
-        st.session_state["kappa_napp"]    = n_appraisers
-        st.session_state["kappa_ntr"]     = n_trials
+        st.session_state["kappa_df_val"]      = df_kappa.copy()
+        st.session_state["kappa_gage_id_val"]    = gage_id
+        st.session_state["kappa_uuid_val"]    = inst_uuid
+        st.session_state["kappa_napp_val"]    = n_appraisers
+        st.session_state["kappa_ntr_val"]      = n_trials
 
     if "kappa_results" in st.session_state:
         r = st.session_state["kappa_results"]
@@ -680,17 +631,10 @@ def render_kappa_tab():
             elif k > 0.7: return "🟡 Aceptable"
             else: return "❌ Inaceptable"
 
-        kappa_df = pd.DataFrame({
-            "Evaluador": list(kappas.keys()),
-            "Kappa": list(kappas.values()),
-            "% Acuerdo vs Ref": list(agreements.values()),
-            "Evaluación": [kappa_status(v) for v in kappas.values()]
-        })
+        kappa_df = pd.DataFrame({"Evaluador": list(kappas.keys()), "Kappa": list(kappas.values()), "% Acuerdo vs Ref": list(agreements.values()), "Evaluación": [kappa_status(v) for v in kappas.values()]})
         st.dataframe(kappa_df, use_container_width=True, hide_index=True)
 
-        fig = px.bar(kappa_df, x="Evaluador", y="Kappa", color="Kappa",
-                     color_continuous_scale=["red","orange","green"], range_color=[0,1],
-                     text="Kappa", title="Kappa de Cohen por Evaluador")
+        fig = px.bar(kappa_df, x="Evaluador", y="Kappa", color="Kappa", color_continuous_scale=["red","orange","green"], range_color=[0,1], text="Kappa", title="Kappa de Cohen por Evaluador")
         fig.add_hline(y=0.9, line_dash="dash", line_color="green")
         fig.add_hline(y=0.7, line_dash="dash", line_color="orange")
         fig.update_traces(texttemplate="%{text:.3f}", textposition="outside")
@@ -698,11 +642,11 @@ def render_kappa_tab():
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
-        meta = _study_meta_form("Kappa", st.session_state["kappa_gage"] or "N/A",
-                                st.session_state["kappa_uuid"] or "", "kappa_meta")
-        n_app  = st.session_state["kappa_napp"]
-        n_tr   = st.session_state["kappa_ntr"]
-        df_k   = st.session_state["kappa_df"]
+        meta = _study_meta_form("Kappa", st.session_state.get("kappa_gage_id_val", "N/A"),
+                                st.session_state.get("kappa_uuid_val", ""), "kappa_meta")
+        n_app  = st.session_state.get("kappa_napp_val", 1)
+        n_tr   = st.session_state.get("kappa_ntr_val", 1)
+        df_k   = st.session_state.get("kappa_df_val", pd.DataFrame())
         records = []
         for _,row in df_k.iterrows():
             for a in range(1, n_app+1):
@@ -734,10 +678,10 @@ def render_uncertainty_tab():
 
     df_unc = st.data_editor(pd.DataFrame(default_sources), use_container_width=True, num_rows="dynamic",
                              column_config={
-                                 "Tipo":         st.column_config.SelectboxColumn("Tipo",        options=["Tipo A","Tipo B"]),
+                                 "Tipo":          st.column_config.SelectboxColumn("Tipo",        options=["Tipo A","Tipo B"]),
                                  "Distribución": st.column_config.SelectboxColumn("Distribución",options=["Normal","Rectangular","Triangular","U"]),
-                                 "Valor":        st.column_config.NumberColumn(format="%.6f"),
-                                 "Divisor":      st.column_config.NumberColumn(format="%.4f"),
+                                 "Valor":         st.column_config.NumberColumn(format="%.6f"),
+                                 "Divisor":       st.column_config.NumberColumn(format="%.4f"),
                                  "Sensibilidad": st.column_config.NumberColumn(format="%.4f"),
                              })
     k_factor = st.number_input("Factor de cobertura k", value=2.0, step=0.1, key="unc_k")
@@ -752,35 +696,33 @@ def render_uncertainty_tab():
             "u_combined": u_combined,"U_expanded": U_expanded,"k": k_factor,
             "n_sources": len(df_u),
         }
-        st.session_state["unc_df"]    = df_u.copy()
-        st.session_state["unc_gage"]  = gage_id
-        st.session_state["unc_uuid"]  = inst_uuid
+        st.session_state["unc_df_val"]    = df_u.copy()
+        st.session_state["unc_gage_id_val"]  = gage_id
+        st.session_state["unc_uuid_val"]  = inst_uuid
         st.session_state["unc_k_val"] = k_factor
 
     if "unc_results" in st.session_state:
         r    = st.session_state["unc_results"]
-        df_u = st.session_state["unc_df"]
+        df_u = st.session_state["unc_df_val"]
         total_var = df_u["u_contrib"].sum()
         df_disp   = df_u[["Fuente","Tipo","Distribución","Valor","Divisor","u_std","Sensibilidad","u_contrib"]].copy()
         df_disp.columns = ["Fuente","Tipo","Distribución","a","Divisor","u_i","c_i","Contribución"]
         df_disp["% Contribución"] = (df_u["u_contrib"] / total_var * 100).round(2)
-        st.dataframe(df_disp.style.format({"u_i":"{:.6f}","Contribución":"{:.8f}","% Contribución":"{:.2f}%"}),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(df_disp.style.format({"u_i":"{:.6f}","Contribución":"{:.8f}","% Contribución":"{:.2f}%"}), use_container_width=True, hide_index=True)
 
         c1,c2,c3 = st.columns(3)
         c1.metric("u_c (Combinada)",  f"{r['u_combined']:.6f}")
         c2.metric(f"U (k={r['k']})", f"{r['U_expanded']:.6f}")
         c3.metric("k",                str(r["k"]))
 
-        fig = px.pie(df_disp, names="Fuente", values="% Contribución",
-                     title="Contribución por fuente", hole=0.35)
+        fig = px.pie(df_disp, names="Fuente", values="% Contribución", title="Contribución por fuente", hole=0.35)
         fig.update_traces(textposition="inside", textinfo="percent+label")
         fig.update_layout(height=380)
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
-        meta    = _study_meta_form("Uncertainty", st.session_state["unc_gage"] or "N/A",
-                                   st.session_state["unc_uuid"] or "", "unc_meta")
+        meta    = _study_meta_form("Uncertainty", st.session_state.get("unc_gage_id_val", "N/A"),
+                                   st.session_state.get("unc_uuid_val", ""), "unc_meta")
         records = [{"study_id":"__PH__","source":str(row["Fuente"]),
                     "uncertainty_type":str(row["Tipo"]),
                     "distribution":str(row.get("Distribución","Normal")),
@@ -788,7 +730,7 @@ def render_uncertainty_tab():
                     "standard_uncertainty":float(row["u_i"]),
                     "sensitivity":float(row["c_i"]),
                     "contribution":float(row["Contribución"])}
-                   for _,row in df_disp.iterrows()]
+                    for _,row in df_disp.iterrows()]
         flat_r = {k:round(v,8) if isinstance(v,float) else v for k,v in r.items()}
         _save_and_pdf_row(meta, flat_r, "Uncertainty", "gt_msa_uncertainty_data", records, "unc")
 
