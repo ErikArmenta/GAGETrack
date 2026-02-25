@@ -1,286 +1,396 @@
 """
-Database Manager - Google Sheets Connection Layer
-Handles all CRUD operations for the instrument inventory using gspread
+Database Manager - Supabase Connection Layer
+Handles all CRUD operations for GageTrack
+Migrated from Google Sheets to Supabase PostgreSQL
 """
+from __future__ import annotations
 import streamlit as st
 import pandas as pd
-import gspread
-from gspread_dataframe import get_as_dataframe, set_with_dataframe
-from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
-import json
+from utils.supabase_client import get_supabase_client
 
-# Scope for Google Sheets API
-SCOPE = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-
-@st.cache_resource
-def get_client():
-    """Initialize and cache the Google Sheets client"""
-    try:
-        # Load credentials from Streamlit secrets
-        service_account_info = st.secrets["gcp_service_account"]
-        
-        # Convert AttrDict to standard dict if necessary
-        creds_dict = {
-            "type": service_account_info["type"],
-            "project_id": service_account_info["project_id"],
-            "private_key_id": service_account_info["private_key_id"],
-            "private_key": service_account_info["private_key"],
-            "client_email": service_account_info["client_email"],
-            "client_id": service_account_info["client_id"],
-            "auth_uri": service_account_info["auth_uri"],
-            "token_uri": service_account_info["token_uri"],
-            "auth_provider_x509_cert_url": service_account_info["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": service_account_info["client_x509_cert_url"],
-            "universe_domain": service_account_info.get("universe_domain", "googleapis.com")
-        }
-        
-        # Use google.oauth2.service_account (modern approach)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"Error connecting to Google API: {str(e)}")
-        return None
-
-def get_worksheet():
-    """Get the specific worksheet for the database"""
-    client = get_client()
-    if client is None:
-        return None
-        
-    try:
-        # Get URL from secrets
-        spreadsheet_url = st.secrets["spreadsheet_url"]
-        
-        # Open spreadsheet by URL
-        sh = client.open_by_url(spreadsheet_url)
-        
-        # Get worksheet by title
-        # Note: Previous instructions said to name it "BaseDatos"
-        try:
-            worksheet = sh.worksheet("BaseDatos")
-            return worksheet
-        except gspread.WorksheetNotFound:
-            st.error("No se encontró la hoja 'BaseDatos'. Por favor verifica el nombre.")
-            return None
-            
-    except Exception as e:
-        st.error(f"Error accessing worksheet: {str(e)}")
-        return None
+# ─────────────────────────────────────────────
+# INSTRUMENTS
+# ─────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
-def load_data():
-    """Load data from Google Sheets with caching (60 seconds TTL)"""
-    worksheet = get_worksheet()
-    if worksheet is None:
-        return pd.DataFrame()
-    
-    try:
-        # Read as DataFrame using gspread-dataframe
-        # evaluate_formulas=True gets value instead of formula
-        df = get_as_dataframe(worksheet, evaluate_formulas=True, usecols=list(range(15)))
-        
-        # Drop empty rows (rows where all columns are NaN)
-        df = df.dropna(how='all')
-        
-        # Ensure columns match expected schema (optional but good practice)
-        expected_cols = [
-            'Id. de Instrumento', 'Estatus', 'Descripción', 'Tipo', 
-            'Ubicación de Almacén', 'Ubicación Actual', 'Fecha del última programación', 
-            'Próximo vencimiento', 'Frecuencia de calibración', 'Unidades de frecuencia', 
-            'Persona responsable', 'Custodio actual', 'N/S del Instrumento', 
-            'No. de Contabilidad', 'No.  de Modelo'
-        ]
-        
-        # Filter for expected columns only to avoid index issues
-        # (in case gspread reads extra empty columns)
-        existing_cols = [c for c in expected_cols if c in df.columns]
-        if existing_cols:
-            df = df[existing_cols]
-        
-        # Convert date columns to datetime
-        date_columns = ['Fecha del última programación', 'Próximo vencimiento']
-        for col in date_columns:
-            if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
-        
-        return df
-    except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
+def load_data() -> pd.DataFrame:
+    """Load all instruments from Supabase with last calibration status"""
+    supabase = get_supabase_client()
+    if supabase is None:
         return pd.DataFrame()
 
-def save_data(df):
-    """Save DataFrame back to Google Sheets"""
-    worksheet = get_worksheet()
-    if worksheet is None:
-        return False
-    
     try:
-        # Ensure date columns are formatted correctly as strings for Sheets
-        df_save = df.copy()
-        
-        # Clear the worksheet properly before writing to avoid leftover rows
-        worksheet.clear()
-        
-        # Write DataFrame
-        set_with_dataframe(worksheet, df_save, include_column_header=True)
-        
-        # Clear cache to reflect changes immediately
+        # Instruments
+        resp = supabase.table("gt_instruments").select("*").order("gage_id").execute()
+        if not resp.data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(resp.data)
+
+        # Last calibration join
+        cal_resp = supabase.table("gt_last_calibration").select("*").execute()
+        if cal_resp.data:
+            cal_df = pd.DataFrame(cal_resp.data)
+            # Rename to avoid collision
+            cal_df = cal_df.rename(columns={
+                "calibration_date": "last_cal_date",
+                "next_calibration_date": "cal_next_date",
+                "result": "cal_result",
+            })
+            df = df.merge(
+                cal_df[["instrument_id", "last_cal_date", "cal_next_date", "cal_result"]],
+                left_on="id", right_on="instrument_id", how="left"
+            )
+
+        # Rename columns to standard names used throughout the app
+        col_map = {
+            "gage_id":                  "Id. de Instrumento",
+            "status":                   "Estatus",
+            "description":              "Descripción",
+            "type":                     "Tipo",
+            "storage_location":         "Ubicación de Almacén",
+            "current_location":         "Ubicación Actual",
+            "last_calibration_date":    "Fecha del última programación",
+            "next_calibration_date":    "Próximo vencimiento",
+            "calibration_frequency":    "Frecuencia de calibración",
+            "frequency_unit":           "Unidades de frecuencia",
+            "responsible_person":       "Persona responsable",
+            "current_custodian":        "Custodio actual",
+            "serial_number":            "N/S del Instrumento",
+            "accounting_number":        "No. de Contabilidad",
+            "model_number":             "No.  de Modelo",
+            "cal_result":               "Calibrado",
+        }
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        # Parse dates
+        for col in ["Fecha del última programación", "Próximo vencimiento"]:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error cargando datos: {str(e)}")
+        return pd.DataFrame()
+
+
+def add_instrument(instrument_data: dict) -> bool:
+    """Add a new instrument to Supabase"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+
+    try:
+        row = _map_to_db(instrument_data)
+        supabase.table("gt_instruments").insert(row).execute()
         st.cache_data.clear()
-        
         return True
     except Exception as e:
-        st.error(f"Error saving data: {str(e)}")
+        st.error(f"Error al agregar instrumento: {str(e)}")
         return False
 
-def add_instrument(instrument_data):
-    """Add a new instrument to the database"""
-    df = load_data()
-    
-    # Create new row as DataFrame
-    new_row = pd.DataFrame([instrument_data])
-    
-    # Append to existing data
-    df = pd.concat([df, new_row], ignore_index=True)
-    
-    return save_data(df)
 
-def update_instrument(instrument_id, updated_data):
-    """Update an existing instrument"""
-    df = load_data()
-    
-    # Find the instrument by ID
-    mask = df['Id. de Instrumento'] == instrument_id
-    
-    if not mask.any():
-        st.error(f"Instrument {instrument_id} not found")
+def update_instrument(instrument_id: str, updated_data: dict) -> bool:
+    """Update an existing instrument by gage_id"""
+    supabase = get_supabase_client()
+    if supabase is None:
         return False
-    
-    # Update the row
-    for key, value in updated_data.items():
-        if key in df.columns:
-            df.loc[mask, key] = value
-    
-    return save_data(df)
 
-def delete_instrument(instrument_id):
-    """Delete an instrument from the database"""
-    df = load_data()
-    
-    # Remove the row
-    df = df[df['Id. de Instrumento'] != instrument_id]
-    
-    return save_data(df)
+    try:
+        row = _map_to_db(updated_data)
+        supabase.table("gt_instruments").update(row).eq("gage_id", instrument_id).execute()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al actualizar instrumento: {str(e)}")
+        return False
 
-def get_instrument_by_id(instrument_id):
-    """Retrieve a single instrument by ID"""
-    df = load_data()
-    
-    mask = df['Id. de Instrumento'] == instrument_id
-    
-    if mask.any():
-        return df[mask].iloc[0].to_dict()
-    
-    return None
 
-def get_kpis():
-    """Calculate KPIs for the dashboard"""
+def delete_instrument(instrument_id: str) -> bool:
+    """Delete an instrument by gage_id"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+
+    try:
+        supabase.table("gt_instruments").delete().eq("gage_id", instrument_id).execute()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar instrumento: {str(e)}")
+        return False
+
+
+def get_instrument_by_id(instrument_id: str) -> dict | None:
+    """Get a single instrument by gage_id"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return None
+
+    try:
+        resp = supabase.table("gt_instruments").select("*").eq("gage_id", instrument_id).single().execute()
+        return resp.data
+    except Exception:
+        return None
+
+
+def get_instrument_uuid(gage_id: str) -> str | None:
+    """Get the UUID of an instrument by gage_id"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return None
+    try:
+        resp = supabase.table("gt_instruments").select("id").eq("gage_id", gage_id).single().execute()
+        return resp.data["id"] if resp.data else None
+    except Exception:
+        return None
+
+
+def generate_next_id() -> str:
+    """Generate the next sequential gage ID"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return "2SL0001"
+
+    try:
+        resp = supabase.table("gt_instruments").select("gage_id").execute()
+        if not resp.data:
+            return "2SL0001"
+
+        numeric_ids = []
+        for row in resp.data:
+            gid = str(row.get("gage_id", ""))
+            if gid.startswith("2SL"):
+                try:
+                    numeric_ids.append(int(gid.replace("2SL", "")))
+                except ValueError:
+                    pass
+
+        return f"2SL{max(numeric_ids) + 1:04d}" if numeric_ids else "2SL0001"
+    except Exception:
+        return "2SL0001"
+
+
+# ─────────────────────────────────────────────
+# KPIs
+# ─────────────────────────────────────────────
+
+def get_kpis() -> dict:
+    """Calculate KPIs from Supabase data"""
     df = load_data()
-    
     if df.empty:
-        return {
-            'total': 0,
-            'active': 0,
-            'overdue': 0,
-            'due_soon': 0,
-            'in_use': 0
-        }
-    
+        return {"total": 0, "active": 0, "overdue": 0, "due_soon": 0, "in_use": 0, "calibrated": 0}
+
     today = pd.Timestamp.now()
-    
-    # Total instruments
+
     total = len(df)
-    
-    # Active instruments
-    # Handle NaN in 'Estatus'
-    if 'Estatus' in df.columns:
-        active = len(df[df['Estatus'] == 'Active'])
-    else:
-        active = 0
-    
-    # Helper to check overdue
-    if 'Próximo vencimiento' in df.columns:
-        overdue = len(df[df['Próximo vencimiento'] < today])
-        
-        # Due soon (within 30 days)
+    active = len(df[df.get("Estatus", pd.Series()).eq("Active")]) if "Estatus" in df.columns else 0
+
+    if "Próximo vencimiento" in df.columns:
+        overdue = len(df[df["Próximo vencimiento"] < today])
         due_soon_date = today + timedelta(days=30)
-        due_soon = len(df[(df['Próximo vencimiento'] >= today) & 
-                          (df['Próximo vencimiento'] <= due_soon_date)])
+        due_soon = len(df[
+            (df["Próximo vencimiento"] >= today) &
+            (df["Próximo vencimiento"] <= due_soon_date)
+        ])
     else:
-        overdue = 0
-        due_soon = 0
-    
-    # In use (not in storage)
-    if 'Ubicación Actual' in df.columns and 'Ubicación de Almacén' in df.columns:
-        in_use = len(df[df['Ubicación Actual'] != df['Ubicación de Almacén']])
+        overdue = due_soon = 0
+
+    if "Ubicación Actual" in df.columns and "Ubicación de Almacén" in df.columns:
+        in_use = len(df[df["Ubicación Actual"] != df["Ubicación de Almacén"]])
     else:
         in_use = 0
-    
+
+    calibrated = len(df[df.get("Calibrado", pd.Series()).eq("Aprobado")]) if "Calibrado" in df.columns else 0
+
     return {
-        'total': total,
-        'active': active,
-        'overdue': overdue,
-        'due_soon': due_soon,
-        'in_use': in_use
+        "total": total, "active": active, "overdue": overdue,
+        "due_soon": due_soon, "in_use": in_use, "calibrated": calibrated
     }
 
-def get_overdue_instruments():
-    """Get list of instruments with overdue calibrations"""
+
+def get_overdue_instruments() -> pd.DataFrame:
+    """Get instruments with overdue calibrations"""
     df = load_data()
-    
-    if df.empty or 'Próximo vencimiento' not in df.columns:
+    if df.empty or "Próximo vencimiento" not in df.columns:
         return pd.DataFrame()
-    
+
     today = pd.Timestamp.now()
-    overdue_df = df[df['Próximo vencimiento'] < today].copy()
-    
-    # Calculate days overdue
-    overdue_df['Días Vencidos'] = (today - overdue_df['Próximo vencimiento']).dt.days
-    
+    overdue_df = df[df["Próximo vencimiento"] < today].copy()
+    overdue_df["Días Vencidos"] = (today - overdue_df["Próximo vencimiento"]).dt.days
     return overdue_df
 
-def generate_next_id():
-    """Generate the next instrument ID"""
-    df = load_data()
-    
-    if df.empty or 'Id. de Instrumento' not in df.columns:
-        return "2SL0001"
-    
-    # Extract numeric part from IDs
-    ids = df['Id. de Instrumento'].dropna()
-    
-    if len(ids) == 0:
-        return "2SL0001"
-    
-    # Get the maximum numeric value
-    numeric_ids = []
-    for id_str in ids:
-        try:
-            # Extract number from format like "2SL0001"
-            # Handle potention non-string values
-            id_s = str(id_str)
-            if id_s.startswith('2SL'):
-                num = int(id_s.replace('2SL', ''))
-                numeric_ids.append(num)
-        except:
-            continue
-    
-    if numeric_ids:
-        next_num = max(numeric_ids) + 1
-        return f"2SL{next_num:04d}"
-    
-    return "2SL0001"
+
+# ─────────────────────────────────────────────
+# CALIBRATIONS
+# ─────────────────────────────────────────────
+
+def get_calibrations(gage_id: str = None) -> pd.DataFrame:
+    """Get calibrations, optionally filtered by gage_id"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return pd.DataFrame()
+
+    try:
+        query = supabase.table("gt_calibrations").select("*").order("calibration_date", desc=True)
+        if gage_id:
+            query = query.eq("gage_id", gage_id)
+        resp = query.execute()
+        return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error cargando calibraciones: {str(e)}")
+        return pd.DataFrame()
+
+
+def add_calibration(calibration_data: dict) -> bool:
+    """Add a new calibration record"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+
+    try:
+        supabase.table("gt_calibrations").insert(calibration_data).execute()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar calibración: {str(e)}")
+        return False
+
+
+def delete_calibration(cal_id: str) -> bool:
+    """Delete a calibration by UUID"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+    try:
+        supabase.table("gt_calibrations").delete().eq("id", cal_id).execute()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar calibración: {str(e)}")
+        return False
+
+
+# ─────────────────────────────────────────────
+# MSA STUDIES
+# ─────────────────────────────────────────────
+
+def get_msa_studies(gage_id: str = None, study_type: str = None) -> pd.DataFrame:
+    """Get MSA studies with optional filters"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return pd.DataFrame()
+    try:
+        query = supabase.table("gt_msa_studies").select("*").order("created_at", desc=True)
+        if gage_id:
+            query = query.eq("gage_id", gage_id)
+        if study_type:
+            query = query.eq("study_type", study_type)
+        resp = query.execute()
+        return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error cargando estudios MSA: {str(e)}")
+        return pd.DataFrame()
+
+
+def create_msa_study(study_data: dict) -> str | None:
+    """Create a new MSA study, returns its UUID"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return None
+    try:
+        resp = supabase.table("gt_msa_studies").insert(study_data).execute()
+        return resp.data[0]["id"] if resp.data else None
+    except Exception as e:
+        st.error(f"Error al crear estudio MSA: {str(e)}")
+        return None
+
+
+def update_msa_study_results(study_id: str, results: dict) -> bool:
+    """Update the results_summary JSONB of an MSA study"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+    try:
+        supabase.table("gt_msa_studies").update({"results_summary": results}).eq("id", study_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error actualizando resultados MSA: {str(e)}")
+        return False
+
+
+def save_msa_data(table: str, records: list) -> bool:
+    """Insert measurement records into an MSA data table"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+    try:
+        supabase.table(table).insert(records).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error guardando datos MSA: {str(e)}")
+        return False
+
+
+def get_msa_data(table: str, study_id: str) -> pd.DataFrame:
+    """Get measurement data for a specific MSA study"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return pd.DataFrame()
+    try:
+        resp = supabase.table(table).select("*").eq("study_id", study_id).execute()
+        return pd.DataFrame(resp.data) if resp.data else pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error cargando datos MSA: {str(e)}")
+        return pd.DataFrame()
+
+
+def delete_msa_study(study_id: str) -> bool:
+    """Delete an MSA study and its data"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+    try:
+        supabase.table("gt_msa_studies").delete().eq("id", study_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error eliminando estudio MSA: {str(e)}")
+        return False
+
+
+# ─────────────────────────────────────────────
+# INTERNAL HELPERS
+# ─────────────────────────────────────────────
+
+def _map_to_db(data: dict) -> dict:
+    """Map form field names to DB column names"""
+    mapping = {
+        "Id. de Instrumento":           "gage_id",
+        "Estatus":                       "status",
+        "Descripción":                   "description",
+        "Tipo":                          "type",
+        "Ubicación de Almacén":          "storage_location",
+        "Ubicación Actual":              "current_location",
+        "Fecha del última programación": "last_calibration_date",
+        "Próximo vencimiento":           "next_calibration_date",
+        "Frecuencia de calibración":     "calibration_frequency",
+        "Unidades de frecuencia":        "frequency_unit",
+        "Persona responsable":           "responsible_person",
+        "Custodio actual":               "current_custodian",
+        "N/S del Instrumento":           "serial_number",
+        "No. de Contabilidad":           "accounting_number",
+        "No.  de Modelo":                "model_number",
+        "Proveedor":                     "supplier",
+        "Costo":                         "cost",
+        "Propietario":                   "owner",
+    }
+    result = {}
+    for key, value in data.items():
+        db_key = mapping.get(key, key)
+        # Convert dates to strings for Supabase
+        if hasattr(value, "isoformat"):
+            value = value.isoformat()
+        result[db_key] = value
+    return result
