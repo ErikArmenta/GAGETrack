@@ -202,7 +202,7 @@ def render_grr_tab():
     if "grr_results" in st.session_state:
         _render_grr_results(st.session_state["grr_results"],
                             st.session_state.get("grr_df", pd.DataFrame()),
-                            st.session_state.get("grr_gage_id_val", gage_id), 
+                            st.session_state.get("grr_gage_id_val", gage_id),
                             st.session_state.get("grr_uuid_val", inst_uuid))
 
 
@@ -499,11 +499,19 @@ def render_linearity_tab():
         st.markdown("---")
         meta = _study_meta_form("Linearity", st.session_state.get("lin_gage_id_val", "N/A"),
                                 st.session_state.get("lin_uuid_val", ""), "lin_meta")
-        records = [{"study_id":"__PH__","part_id":str(row["Pieza"]),
-                    "reference_value":float(row["Referencia"]),
-                    "measured_value":float(row["Medición"]),"trial":int(row["Réplica"])}
-                    for _,row in st.session_state.get("lin_df_val", pd.DataFrame()).iterrows()]
-        flat_r = {k:round(v,6) for k,v in r.items() if isinstance(v,(int,float))}
+# --- BLOQUE de correcion DE LINEALIDAD ---
+        records = []
+        df_to_save = st.session_state.get("lin_df_val", pd.DataFrame())
+        for _, row in df_to_save.iterrows():
+            records.append({
+                "study_id": "__PH__",
+                "part_id": str(row["Pieza"]),
+                "reference_value": float(row["Referencia"]),
+                "measured_value": float(row["Medición"]),
+                "trial": int(row["Réplica"])
+            })
+
+        flat_r = {k: round(v, 6) for k, v in r.items() if isinstance(v, (int, float))}
         _save_and_pdf_row(meta, flat_r, "Linearity", "gt_msa_linearity_data", records, "lin")
 
 
@@ -723,15 +731,22 @@ def render_uncertainty_tab():
         st.markdown("---")
         meta    = _study_meta_form("Uncertainty", st.session_state.get("unc_gage_id_val", "N/A"),
                                    st.session_state.get("unc_uuid_val", ""), "unc_meta")
-        records = [{"study_id":"__PH__","source":str(row["Fuente"]),
-                    "uncertainty_type":str(row["Tipo"]),
-                    "distribution":str(row.get("Distribución","Normal")),
-                    "value":float(row["Valor"]),"divisor":float(row["Divisor"]),
-                    "standard_uncertainty":float(row["u_i"]),
-                    "sensitivity":float(row["c_i"]),
-                    "contribution":float(row["Contribución"])}
-                    for _,row in df_disp.iterrows()]
-        flat_r = {k:round(v,8) if isinstance(v,float) else v for k,v in r.items()}
+        # --- BLOQUE CORREGIDO DE INCERTIDUMBRE ---
+        records = []
+        for _, row in df_disp.iterrows():
+            records.append({
+                "study_id": "__PH__",
+                "source": str(row["Fuente"]),
+                "uncertainty_type": str(row["Tipo"]),
+                "distribution": str(row.get("Distribución", "Normal")),
+                "value": float(row["a"]),  # Usamos "a" porque renombraste la columna
+                "divisor": float(row["Divisor"]),
+                "standard_uncertainty": float(row["u_i"]), # Usamos "u_i"
+                "sensitivity": float(row["c_i"]),          # Usamos "c_i"
+                "contribution": float(row["Contribución"])
+            })
+
+        flat_r = {k: round(v, 8) if isinstance(v, float) else v for k, v in r.items()}
         _save_and_pdf_row(meta, flat_r, "Uncertainty", "gt_msa_uncertainty_data", records, "unc")
 
 
