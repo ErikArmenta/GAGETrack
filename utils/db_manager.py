@@ -273,6 +273,23 @@ def delete_calibration(cal_id: str) -> bool:
         return False
 
 
+def update_calibration_db(cal_id: str, updated_data: dict) -> bool:
+    """Update an existing calibration record in Supabase"""
+    supabase = get_supabase_client()
+    if supabase is None:
+        return False
+    try:
+        # Limpiamos el dict para no enviar el ID en el cuerpo del update
+        data_to_send = {k: v for k, v in updated_data.items() if k != 'id'}
+
+        supabase.table("gt_calibrations").update(data_to_send).eq("id", cal_id).execute()
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al actualizar calibración: {str(e)}")
+        return False
+
+
 # ─────────────────────────────────────────────
 # MSA STUDIES
 # ─────────────────────────────────────────────
