@@ -77,15 +77,14 @@ def render_calibration_history(gage_id: str):
     """Show editable calibration history table for an instrument"""
     st.markdown("#### 📋 Historial de Calibraciones (Editable)")
 
-    # 1. Cargar datos originales
+    # 1. Cargar datos
     df = get_calibrations(gage_id=gage_id)
 
     if df.empty:
         st.info("ℹ️ No hay calibraciones registradas para este instrumento.")
         return
 
-    # Definimos las columnas que queremos editar
-    # Nota: Mantenemos los nombres originales de la DB para facilitar el guardado
+    # Columnas que queremos manejar
     edit_cols = [
         "id", "calibration_date", "next_calibration_date", "technician",
         "supplier", "certificate_number", "result", "cost", "tolerance", "observations"
@@ -94,44 +93,60 @@ def render_calibration_history(gage_id: str):
     available_cols = [c for c in edit_cols if c in df.columns]
     df_to_edit = df[available_cols].copy()
 
-    # 2. Configurar el Editor de Datos
-    edited_df = st.data_editor(
-        df_to_edit,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "id": None, # Ocultamos el UUID pero ahí sigue internamente
-            "calibration_date": st.column_config.DateColumn("Fecha Cal."),
-            "next_calibration_date": st.column_config.DateColumn("Próxima Cal."),
-            "result": st.column_config.SelectboxColumn("Resultado", options=["Aprobado", "Rechazado", "Condicional"]),
-            "cost": st.column_config.NumberColumn("Costo ($)", format="$%.2f"),
-            "technician": "Técnico",
-            "supplier": "Proveedor",
-            "certificate_number": "Certificado",
-            "tolerance": "Tolerancia",
-            "observations": "Observaciones"
-        },
-        key=f"editor_{gage_id}"
-    )
+    # --- CORRECCIÓN CRÍTICA DE TIPOS ---
+    # Convertimos las columnas de fecha a objetos datetime de Python.
+    # Si vienen como string desde Supabase, st.column_config.DateColumn fallará sin esto.
+    for col in ["calibration_date", "next_calibration_date"]:
+        if col in df_to_edit.columns:
+            df_to_edit[col] = pd.to_datetime(df_to_edit[col], errors='coerce')
 
-    # 3. Lógica de Guardado
-    # Detectamos si hubo cambios comparando con el DF original
+    # Aseguramos que el costo sea numérico para el NumberColumn
+    if "cost" in df_to_edit.columns:
+        df_to_edit["cost"] = pd.to_numeric(df_to_edit["cost"], errors='coerce')
+    # ----------------------------------
+
+    # 2. Configurar el Editor de Datos
+    try:
+        edited_df = st.data_editor(
+            df_to_edit,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "id": None,
+                "calibration_date": st.column_config.DateColumn("Fecha Cal.", format="YYYY-MM-DD"),
+                "next_calibration_date": st.column_config.DateColumn("Próxima Cal.", format="YYYY-MM-DD"),
+                "result": st.column_config.SelectboxColumn("Resultado", options=["Aprobado", "Rechazado", "Condicional"]),
+                "cost": st.column_config.NumberColumn("Costo ($)", format="$%.2f"),
+                "technician": "Técnico",
+                "supplier": "Proveedor",
+                "certificate_number": "Certificado",
+                "tolerance": "Tolerancia",
+                "observations": "Observaciones"
+            },
+            key=f"editor_{gage_id}"
+        )
+    except Exception as e:
+        st.error(f"Error visualizando la tabla: {e}")
+        st.info("Asegúrate de que los formatos de fecha en la base de datos sean válidos (YYYY-MM-DD).")
+        return
+
+    # 3. Lógica de Guardado (Se mantiene igual que la anterior)
     if not edited_df.equals(df_to_edit):
         c1, _ = st.columns([1, 4])
         if c1.button("💾 Guardar cambios", type="primary"):
             success_count = 0
-            # Iteramos sobre las filas para encontrar qué cambió
             for i in range(len(edited_df)):
                 row_id = edited_df.iloc[i]["id"]
                 current_row = edited_df.iloc[i].to_dict()
                 original_row = df_to_edit[df_to_edit["id"] == row_id].iloc[0].to_dict()
 
-                # Si la fila actual es distinta a la original, actualizamos Supabase
                 if current_row != original_row:
-                    # Convertir Timestamp de Pandas a string ISO para Supabase
+                    # Convertir para Supabase
                     for k, v in current_row.items():
-                        if hasattr(v, "isoformat"):
+                        if hasattr(v, "isoformat") and not pd.isna(v):
                             current_row[k] = v.isoformat()
+                        elif pd.isna(v):
+                            current_row[k] = None
 
                     if update_calibration_db(row_id, current_row):
                         success_count += 1
@@ -155,7 +170,6 @@ def render_calibration_history(gage_id: str):
                 if delete_calibration(cal_ids[idx]):
                     st.success("✅ Registro eliminado.")
                     st.rerun()
-
 
 def render_msa_quick_access(gage_id: str):
     """Quick access buttons to MSA studies for this instrument"""
@@ -294,4 +308,5 @@ def render_calibrations():
 
 if __name__ == "__main__":
     render_calibrations()
+
 
