@@ -100,9 +100,11 @@ def render_calibration_history(gage_id: str):
     df_display = df_display[available]
 
     def style_result(val):
-        color = {"Aprobado": "background-color:#d4edda; color:#155724",
-                 "Rechazado": "background-color:#f8d7da; color:#721c24",
-                 "Condicional": "background-color:#fff3cd; color:#856404"}.get(val, "")
+        color = {
+            "Aprobado":    "background-color:rgba(39,174,96,0.25);  color:#86efac; font-weight:600;",
+            "Rechazado":   "background-color:rgba(231,76,60,0.25);  color:#fca5a5; font-weight:600;",
+            "Condicional": "background-color:rgba(243,156,18,0.25); color:#fde68a; font-weight:600;",
+        }.get(val, "")
         return color
 
     styled = df_display.style.applymap(style_result, subset=["Resultado"] if "Resultado" in df_display.columns else [])
@@ -197,27 +199,29 @@ def render_calibrations():
 
     # Show instrument summary card
     st.markdown(f"""
-    <div style="background:white; border-radius:12px; padding:1.5rem; box-shadow:0 2px 8px rgba(0,0,0,0.1); 
-                margin-bottom:1.5rem; border-left:4px solid #667eea;">
+    <div style="background:#1a1f2e; border-radius:12px; padding:1.5rem;
+                box-shadow:0 4px 24px rgba(0,0,0,0.4);
+                margin-bottom:1.5rem; border-left:4px solid #667eea;
+                border-top:1px solid rgba(255,255,255,0.08);">
         <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
             <div>
-                <p style="margin:0; color:#7f8c8d; font-size:0.8rem; text-transform:uppercase;">ID</p>
-                <p style="margin:0; font-weight:700; font-size:1.2rem;">{selected_id}</p>
+                <p style="margin:0; color:#9aa0b4; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;">ID</p>
+                <p style="margin:0; font-weight:700; font-size:1.2rem; color:#e8eaf6;">{selected_id}</p>
             </div>
             <div>
-                <p style="margin:0; color:#7f8c8d; font-size:0.8rem; text-transform:uppercase;">Descripción</p>
-                <p style="margin:0; font-weight:600;">{inst_row.get('Descripción', 'N/A')}</p>
+                <p style="margin:0; color:#9aa0b4; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;">Descripción</p>
+                <p style="margin:0; font-weight:600; color:#e8eaf6;">{inst_row.get('Descripción', 'N/A')}</p>
             </div>
             <div>
-                <p style="margin:0; color:#7f8c8d; font-size:0.8rem; text-transform:uppercase;">Estatus</p>
-                <p style="margin:0; font-weight:600;">{inst_row.get('Estatus', 'N/A')}</p>
+                <p style="margin:0; color:#9aa0b4; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;">Estatus</p>
+                <p style="margin:0; font-weight:600; color:#e8eaf6;">{inst_row.get('Estatus', 'N/A')}</p>
             </div>
             <div>
-                <p style="margin:0; color:#7f8c8d; font-size:0.8rem; text-transform:uppercase;">Ubicación</p>
-                <p style="margin:0; font-weight:600;">{inst_row.get('Ubicación Actual', 'N/A')}</p>
+                <p style="margin:0; color:#9aa0b4; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;">Ubicación</p>
+                <p style="margin:0; font-weight:600; color:#e8eaf6;">{inst_row.get('Ubicación Actual', 'N/A')}</p>
             </div>
             <div>
-                <p style="margin:0; color:#7f8c8d; font-size:0.8rem; text-transform:uppercase;">Estado Calibración</p>
+                <p style="margin:0; color:#9aa0b4; font-size:0.8rem; text-transform:uppercase; letter-spacing:1px;">Estado Calibración</p>
                 <p style="margin:0; font-weight:700; color:{'#27ae60' if inst_row.get('Calibrado') == 'Aprobado' else '#e74c3c'};">
                     {inst_row.get('Calibrado', 'Sin calibrar') or 'Sin calibrar'}
                 </p>
