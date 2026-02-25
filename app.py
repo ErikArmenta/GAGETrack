@@ -12,6 +12,7 @@ sys.path.append(str(Path(__file__).parent))
 from utils.styles import load_css
 from modules.dashboard import render_dashboard
 from modules.inventory import render_inventory
+from modules.calibrations import render_calibrations
 from modules.msa import render_msa
 from modules.reports import render_reports
 
@@ -49,7 +50,8 @@ def render_sidebar():
         pages = {
             "📊 Dashboard": "Dashboard",
             "📦 Inventario": "Inventario",
-            "📊 MSA (Gage R&R)": "MSA",
+            "🔬 Calibraciones": "Calibraciones",
+            "📊 MSA": "MSA",
             "📄 Reportes": "Reportes"
         }
         
@@ -65,7 +67,7 @@ def render_sidebar():
         <div style='text-align: center; color: white; font-size: 0.8rem;'>
             <p><strong>GageTrack v2.0</strong></p>
             <p>Sistema de Gestión de Instrumentos</p>
-            <p style='margin-top: 1rem;'>© 2026 - Powered by Streamlit</p>
+            <p style='margin-top: 1rem;'>© 2026 - Developed by Master Engineer Erik Armenta</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -89,6 +91,8 @@ def main():
         render_dashboard()
     elif current_page == "Inventario":
         render_inventory()
+    elif current_page == "Calibraciones":
+        render_calibrations()
     elif current_page == "MSA":
         render_msa()
     elif current_page == "Reportes":
