@@ -11,12 +11,13 @@ from utils.db_manager import (
     load_data, get_calibrations, add_calibration,
     delete_calibration, get_instrument_uuid, get_msa_studies
 )
+from utils.db_manager import update_calibration_db
 
 
 def render_calibration_form(instrument_id: str, instrument_uuid: str):
     """Form to capture a new calibration"""
     st.markdown("#### 📝 Datos de la Nueva Calibración")
-    
+
     with st.form("form_nueva_calibracion", clear_on_submit=True):
         col1, col2 = st.columns(2)
 
@@ -73,64 +74,93 @@ def render_calibration_form(instrument_id: str, instrument_uuid: str):
 
 
 def render_calibration_history(gage_id: str):
-    """Show calibration history table for an instrument"""
-    st.markdown("#### 📋 Historial de Calibraciones")
-    
+    """Show editable calibration history table for an instrument"""
+    st.markdown("#### 📋 Historial de Calibraciones (Editable)")
+
+    # 1. Cargar datos originales
     df = get_calibrations(gage_id=gage_id)
-    
+
     if df.empty:
         st.info("ℹ️ No hay calibraciones registradas para este instrumento.")
         return
 
-    # Format columns for display
-    display_cols = {
-        "calibration_date": "Fecha Calibración",
-        "next_calibration_date": "Próxima Calibración",
-        "technician": "Técnico",
-        "supplier": "Proveedor",
-        "certificate_number": "N° Certificado",
-        "result": "Resultado",
-        "cost": "Costo ($)",
-        "tolerance": "Tolerancia",
-        "observations": "Observaciones",
-    }
+    # Definimos las columnas que queremos editar
+    # Nota: Mantenemos los nombres originales de la DB para facilitar el guardado
+    edit_cols = [
+        "id", "calibration_date", "next_calibration_date", "technician",
+        "supplier", "certificate_number", "result", "cost", "tolerance", "observations"
+    ]
 
-    df_display = df.rename(columns={k: v for k, v in display_cols.items() if k in df.columns})
-    available = [v for k, v in display_cols.items() if k in df.columns]
-    df_display = df_display[available]
+    available_cols = [c for c in edit_cols if c in df.columns]
+    df_to_edit = df[available_cols].copy()
 
-    def style_result(val):
-        color = {
-            "Aprobado":    "background-color:rgba(39,174,96,0.25);  color:#86efac; font-weight:600;",
-            "Rechazado":   "background-color:rgba(231,76,60,0.25);  color:#fca5a5; font-weight:600;",
-            "Condicional": "background-color:rgba(243,156,18,0.25); color:#fde68a; font-weight:600;",
-        }.get(val, "")
-        return color
+    # 2. Configurar el Editor de Datos
+    edited_df = st.data_editor(
+        df_to_edit,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "id": None, # Ocultamos el UUID pero ahí sigue internamente
+            "calibration_date": st.column_config.DateColumn("Fecha Cal."),
+            "next_calibration_date": st.column_config.DateColumn("Próxima Cal."),
+            "result": st.column_config.SelectboxColumn("Resultado", options=["Aprobado", "Rechazado", "Condicional"]),
+            "cost": st.column_config.NumberColumn("Costo ($)", format="$%.2f"),
+            "technician": "Técnico",
+            "supplier": "Proveedor",
+            "certificate_number": "Certificado",
+            "tolerance": "Tolerancia",
+            "observations": "Observaciones"
+        },
+        key=f"editor_{gage_id}"
+    )
 
-    styled = df_display.style.applymap(style_result, subset=["Resultado"] if "Resultado" in df_display.columns else [])
+    # 3. Lógica de Guardado
+    # Detectamos si hubo cambios comparando con el DF original
+    if not edited_df.equals(df_to_edit):
+        c1, _ = st.columns([1, 4])
+        if c1.button("💾 Guardar cambios", type="primary"):
+            success_count = 0
+            # Iteramos sobre las filas para encontrar qué cambió
+            for i in range(len(edited_df)):
+                row_id = edited_df.iloc[i]["id"]
+                current_row = edited_df.iloc[i].to_dict()
+                original_row = df_to_edit[df_to_edit["id"] == row_id].iloc[0].to_dict()
 
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+                # Si la fila actual es distinta a la original, actualizamos Supabase
+                if current_row != original_row:
+                    # Convertir Timestamp de Pandas a string ISO para Supabase
+                    for k, v in current_row.items():
+                        if hasattr(v, "isoformat"):
+                            current_row[k] = v.isoformat()
 
-    # Delete option
+                    if update_calibration_db(row_id, current_row):
+                        success_count += 1
+
+            if success_count > 0:
+                st.success(f"✅ Se actualizaron {success_count} registros.")
+                st.rerun()
+
+    # Mantener el expansor de eliminación abajo
+    st.markdown("---")
     if "id" in df.columns:
-        with st.expander("🗑️ Eliminar calibración"):
+        with st.expander("🗑️ Eliminar calibración permanentemente"):
             cal_ids = df["id"].tolist()
             cal_labels = [
                 f"{row.get('calibration_date', 'N/A')} - {row.get('result', 'N/A')}"
                 for _, row in df.iterrows()
             ]
-            selected_label = st.selectbox("Seleccionar", cal_labels)
+            selected_label = st.selectbox("Seleccionar registro para eliminar", cal_labels)
             idx = cal_labels.index(selected_label)
-            if st.button("Eliminar", type="secondary"):
+            if st.button("Confirmo eliminar", type="secondary"):
                 if delete_calibration(cal_ids[idx]):
-                    st.success("✅ Calibración eliminada.")
+                    st.success("✅ Registro eliminado.")
                     st.rerun()
 
 
 def render_msa_quick_access(gage_id: str):
     """Quick access buttons to MSA studies for this instrument"""
     st.markdown("#### 🔬 Estudios MSA Relacionados")
-    
+
     studies_df = get_msa_studies(gage_id=gage_id)
 
     if studies_df.empty:
@@ -169,7 +199,7 @@ def render_calibrations():
 
     # Load instruments for selector
     df_inst = load_data()
-    
+
     if df_inst.empty:
         st.warning("⚠️ No hay instrumentos registrados. Agrega instrumentos en el módulo de Inventario.")
         return
@@ -264,3 +294,4 @@ def render_calibrations():
 
 if __name__ == "__main__":
     render_calibrations()
+
