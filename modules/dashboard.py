@@ -23,7 +23,7 @@ def render_dashboard():
     # KPI Section
     st.markdown("### Métricas Clave")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.markdown(f"""
@@ -56,6 +56,15 @@ def render_dashboard():
             <div class="kpi-value">{kpis['active']}</div>
         </div>
         """, unsafe_allow_html=True)
+
+    with col5:
+        st.markdown(f"""
+        <div class="kpi-card" style="background:linear-gradient(135deg,#27ae60,#2ecc71);color:white;border-radius:10px;padding:1rem;text-align:center;">
+            <div class="kpi-label" style="color:rgba(255,255,255,0.85);">🔬 Calibrados (Aprobado)</div>
+            <div class="kpi-value">{kpis.get('calibrated', 0)}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
     
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -176,6 +185,7 @@ def render_dashboard():
                 "Frecuencia",
                 width="small"
             ),
+            "Calibrado": st.column_config.TextColumn("🔬 Calibrado", width="small"),
         }
         
         st.dataframe(
@@ -196,8 +206,13 @@ def render_dashboard():
                 file_name=f"instrumentos_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
+        with col2:
+            if st.button("🔄 Actualizar Datos"):
+                st.cache_data.clear()
+                st.rerun()
     else:
-        st.info("No hay datos disponibles. Verifica la conexión con Google Sheets.")
+        st.info("ℹ️ No hay datos disponibles. Verifica la conexión con Supabase o agrega instrumentos.")
+
 
 if __name__ == "__main__":
     render_dashboard()
