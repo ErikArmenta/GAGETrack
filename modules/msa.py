@@ -461,21 +461,39 @@ def render_linearity_tab():
 
     if st.button("🔬 Analizar Linealidad", type="primary", key="lin_analyze"):
         df_l = df_lin.copy()
-        df_l["Sesgo"] = df_l["Medición"] - df_l["Referencia"]
-        part_stats = df_l.groupby("Pieza").agg(Referencia=("Referencia","first"), Sesgo_Promedio=("Sesgo","mean")).reset_index()
-        refs   = part_stats["Referencia"].values
-        biases = part_stats["Sesgo_Promedio"].values
-        slope, intercept, r_val, p_val, _ = stats.linregress(refs, biases)
-        r2          = r_val**2
-        linearity   = abs(slope) * (max(refs)-min(refs)) if max(refs)!=min(refs) else 0
-        st.session_state["lin_results"] = {
-            "slope":slope,"intercept":intercept,"r_squared":r2,
-            "p_value":p_val,"linearity":linearity,
-            "refs":refs.tolist(),"biases":biases.tolist(),
-        }
-        st.session_state["lin_df_val"]    = df_lin.copy()
-        st.session_state["lin_gage_id_val"]  = gage_id
-        st.session_state["lin_uuid_val"]  = inst_uuid
+
+        # Validación: Evitar que todos los valores de referencia sean iguales
+        if df_l["Referencia"].nunique() < 2:
+            st.error("❌ Error: Debes ingresar al menos 2 valores de Referencia distintos para calcular la linealidad.")
+        else:
+            try:
+                df_l["Sesgo"] = df_l["Medición"] - df_l["Referencia"]
+                part_stats = df_l.groupby("Pieza").agg(
+                    Referencia=("Referencia","first"),
+                    Sesgo_Promedio=("Sesgo","mean")
+                ).reset_index()
+
+                refs   = part_stats["Referencia"].values
+                biases = part_stats["Sesgo_Promedio"].values
+
+                # Ejecutar Regresión
+                slope, intercept, r_val, p_val, _ = stats.linregress(refs, biases)
+                r2 = r_val**2
+                linearity = abs(slope) * (max(refs) - min(refs)) if max(refs) != min(refs) else 0
+
+                # Guardar en session_state
+                st.session_state["lin_results"] = {
+                    "slope": slope, "intercept": intercept, "r_squared": r2,
+                    "p_value": p_val, "linearity": linearity,
+                    "refs": refs.tolist(), "biases": biases.tolist(),
+                }
+                st.session_state["lin_df_val"] = df_lin.copy()
+                st.session_state["lin_gage_id_val"] = gage_id
+                st.session_state["lin_uuid_val"] = inst_uuid
+                st.success("✅ Análisis completado con éxito.")
+
+            except Exception as e:
+                st.error(f"Error en el cálculo: {e}")
 
     if "lin_results" in st.session_state:
         r    = st.session_state["lin_results"]
