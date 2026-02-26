@@ -104,7 +104,9 @@ def _save_and_pdf_row(meta: dict, results: dict, study_type: str,
             else:
                 study_id = create_msa_study(meta)
                 if study_id:
-                    save_msa_data(table, records)
+                    # Fix 4: reemplazar placeholder con UUID real antes de insertar
+                    real_records = [{**rec, "study_id": study_id} for rec in records]
+                    save_msa_data(table, real_records)
                     update_msa_study_results(study_id, results)
                     st.session_state[saved_key] = study_id
                     st.success(f"✅ Guardado. ID: `{study_id}`")
@@ -370,11 +372,16 @@ def render_stability_tab():
     with col2:
         reference_val = st.number_input("Valor de Referencia", value=0.0, format="%.4f", key="stab_ref")
 
-    rows = [{"Subgrupo": s, "Lectura": r, "Medición": 0.0}
+    # Fix 2: agregar columna Fecha por subgrupo
+    from datetime import date as _date
+    rows = [{"Subgrupo": s, "Fecha": _date.today(), "Lectura": r, "Medición": 0.0}
             for s in range(1, n_subgroups+1)
             for r in range(1, n_readings+1)]
     df_stab = st.data_editor(pd.DataFrame(rows), use_container_width=True, num_rows="fixed",
-                              column_config={"Medición": st.column_config.NumberColumn(format="%.4f")})
+                              column_config={
+                                  "Fecha":    st.column_config.DateColumn("Fecha", format="YYYY-MM-DD"),
+                                  "Medición": st.column_config.NumberColumn(format="%.4f")
+                              })
 
     if st.button("🔬 Analizar Estabilidad", type="primary", key="stab_analyze"):
         grp    = df_stab.groupby("Subgrupo")["Medición"]
@@ -433,10 +440,21 @@ def render_stability_tab():
         st.markdown("---")
         meta = _study_meta_form("Stability", st.session_state.get("stab_gage_id_val", "N/A"),
                                 st.session_state.get("stab_uuid_val", ""), "stab_meta")
-        records = [{"study_id":"__PH__","subgroup":int(row["Subgrupo"]),
-                    "measurement":float(row["Medición"]),
-                    "reference_value":float(st.session_state.get("stab_ref_val", 0))}
-                    for _,row in st.session_state.get("stab_df_val", pd.DataFrame()).iterrows()]
+        # Fix 2: incluir Fecha en records (omitir silenciosamente si columna no existe en DB)
+        records = []
+        for _, row in st.session_state.get("stab_df_val", pd.DataFrame()).iterrows():
+            rec = {
+                "study_id": "__PH__",
+                "subgroup": int(row["Subgrupo"]),
+                "measurement": float(row["Medición"]),
+                "reference_value": float(st.session_state.get("stab_ref_val", 0)),
+            }
+            if "Fecha" in row and row["Fecha"] is not None:
+                try:
+                    rec["measurement_date"] = str(row["Fecha"])
+                except Exception:
+                    pass
+            records.append(rec)
         flat_r = {k:round(v,6) for k,v in r.items() if isinstance(v,(int,float))}
         _save_and_pdf_row(meta, flat_r, "Stability", "gt_msa_stability_data", records, "stab")
 
@@ -450,8 +468,9 @@ def render_linearity_tab():
     gage_id, inst_uuid = _gage_selector("lin_gage")
 
     col1, col2 = st.columns(2)
-    with col1: n_parts  = st.number_input("Piezas de referencia", 3, 10, 5, key="lin_nparts")
-    with col2: n_trials = st.number_input("Réplicas por pieza",   2, 10, 5, key="lin_ntrials")
+    # Fix 1: ampliar límite máximo a 12
+    with col1: n_parts  = st.number_input("Piezas de referencia", 3, 12, 5, key="lin_nparts")
+    with col2: n_trials = st.number_input("Réplicas por pieza",   2, 12, 5, key="lin_ntrials")
 
     rows = [{"Pieza": f"P{p+1}", "Referencia": 0.0, "Medición": 0.0, "Réplica": r+1}
             for p in range(n_parts) for r in range(n_trials)]
@@ -587,8 +606,12 @@ def render_bias_tab():
         c2.metric("% Sesgo", f"{r['pct_bias']:.2f}%")
         c3.metric("t estadístico", f"{r['t_stat']:.4f}")
         c4.metric("p-valor", f"{r['p_value']:.4f}")
-        if r["p_value"] < 0.05: st.error("❌ Sesgo estadísticamente significativo")
-        else:                   st.success("✅ Sesgo no significativo")
+        # Fix 3: alerta siempre dinámica mostrando p-value actual
+        p_val = float(r["p_value"])
+        if p_val < 0.05:
+            st.error(f"❌ Sesgo estadísticamente significativo (p = {p_val:.4f} < 0.05)")
+        else:
+            st.success(f"✅ Sesgo no significativo (p = {p_val:.4f} ≥ 0.05)")
 
         st.markdown("---")
         meta = _study_meta_form("Bias", st.session_state.get("bias_gage_id_val", "N/A"),
@@ -776,15 +799,40 @@ def render_msa():
     st.title("📊 MSA — Análisis del Sistema de Medición")
     st.markdown("Estudios según **Manual AIAG MSA** 4ª Edición.")
 
-    tabs = st.tabs(["📐 GRR ANOVA","📈 Estabilidad","📏 Linealidad",
-                    "⚖️ Sesgo","🏷️ Kappa","📊 Incertidumbre"])
+    # Fix 5: usar st.radio para garantizar selección del estudio correcto
+    # desde Calibraciones (msa_tab viene en session_state)
+    TAB_NAMES = ["📐 GRR ANOVA", "📈 Estabilidad", "📏 Linealidad",
+                 "⚖️ Sesgo", "🏷️ Kappa", "📊 Incertidumbre"]
+    TAB_MAP   = {"GRR": 0, "Stability": 1, "Linearity": 2,
+                 "Bias": 3, "Kappa": 4, "Uncertainty": 5}
 
-    with tabs[0]: render_grr_tab()
-    with tabs[1]: render_stability_tab()
-    with tabs[2]: render_linearity_tab()
-    with tabs[3]: render_bias_tab()
-    with tabs[4]: render_kappa_tab()
-    with tabs[5]: render_uncertainty_tab()
+    # Consumir el tab solicitado desde Calibraciones
+    requested = st.session_state.pop("msa_tab", None)
+    if requested and requested in TAB_MAP:
+        st.session_state["_msa_radio_idx"] = TAB_MAP[requested]
+    if "_msa_radio_idx" not in st.session_state:
+        st.session_state["_msa_radio_idx"] = 0
+
+    selected_idx = st.radio(
+        "Seleccionar Estudio",
+        options=list(range(len(TAB_NAMES))),
+        format_func=lambda i: TAB_NAMES[i],
+        horizontal=True,
+        index=st.session_state["_msa_radio_idx"],
+        key="_msa_radio",
+        label_visibility="collapsed",
+    )
+    # Mantener la selección actual
+    st.session_state["_msa_radio_idx"] = selected_idx
+
+    st.markdown("---")
+
+    if selected_idx == 0: render_grr_tab()
+    elif selected_idx == 1: render_stability_tab()
+    elif selected_idx == 2: render_linearity_tab()
+    elif selected_idx == 3: render_bias_tab()
+    elif selected_idx == 4: render_kappa_tab()
+    elif selected_idx == 5: render_uncertainty_tab()
 
 
 if __name__ == "__main__":
