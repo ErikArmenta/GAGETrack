@@ -327,11 +327,25 @@ def create_msa_study(study_data: dict) -> str | None:
 
 def update_msa_study_results(study_id: str, results: dict) -> bool:
     """Update the results_summary JSONB of an MSA study"""
+    import math
     supabase = get_supabase_client()
     if supabase is None:
         return False
     try:
-        supabase.table("gt_msa_studies").update({"results_summary": results}).eq("id", study_id).execute()
+        # Fix 4: sanitizar NaN e Inf (np.float64 no es JSON-serializable)
+        def _sanitize(v):
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                return None
+            try:
+                import numpy as np
+                if isinstance(v, (np.floating, np.integer)):
+                    fv = float(v)
+                    return None if (math.isnan(fv) or math.isinf(fv)) else fv
+            except ImportError:
+                pass
+            return v
+        clean_results = {k: _sanitize(v) for k, v in results.items()}
+        supabase.table("gt_msa_studies").update({"results_summary": clean_results}).eq("id", study_id).execute()
         return True
     except Exception as e:
         st.error(f"Error actualizando resultados MSA: {str(e)}")
