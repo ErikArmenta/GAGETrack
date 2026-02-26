@@ -35,10 +35,48 @@ def render_calibration_form(instrument_id: str, instrument_uuid: str):
             )
             cost = st.number_input("💰 Costo ($)", min_value=0.0, value=0.0, step=0.01)
             tolerance = st.text_input("⚙️ Tolerancia", placeholder="Ej: ±0.01 mm")
-            measured_value = st.number_input("📏 Valor Medido", value=0.0, step=0.001, format="%.4f")
-            reference_value = st.number_input("📐 Valor de Referencia", value=0.0, step=0.001, format="%.4f")
+            measured_value = st.number_input("📏 Valor Medido", value=0.0, step=0.000001, format="%.6f")
+            reference_value = st.number_input("📐 Valor de Referencia (principal)", value=0.0, step=0.000001, format="%.6f")
 
-        uncertainty = st.number_input("📊 Incertidumbre (U)", min_value=0.0, value=0.0, step=0.0001, format="%.6f")
+        uncertainty = st.number_input("📊 Incertidumbre (U)", min_value=0.0, value=0.0, step=0.000001, format="%.6f")
+
+        # ── Límites de Control ─────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("##### 🎯 Límites de Control")
+        cl1, cl2, cl3 = st.columns(3)
+        with cl1:
+            control_nominal = st.number_input(
+                "Nominal / Target", value=0.0, step=0.000001, format="%.6f",
+                help="Valor nominal esperado del instrumento"
+            )
+        with cl2:
+            control_ucl = st.number_input(
+                "UCL (Límite Superior)", value=0.0, step=0.000001, format="%.6f",
+                help="Upper Control Limit"
+            )
+        with cl3:
+            control_lcl = st.number_input(
+                "LCL (Límite Inferior)", value=0.0, step=0.000001, format="%.6f",
+                help="Lower Control Limit"
+            )
+
+        # ── Valores de Referencia (hasta 10) ──────────────────────────
+        st.markdown("---")
+        st.markdown("##### 📐 Valores de Referencia (hasta 10)")
+        st.caption("Ingresa los valores que apliquen. Los campos vacíos (0) se omiten automáticamente.")
+        ref_cols_a = st.columns(5)
+        ref_cols_b = st.columns(5)
+        ref_inputs = []
+        for i, col in enumerate(ref_cols_a):
+            v = col.number_input(f"Ref. {i+1}", value=0.0, step=0.000001, format="%.6f",
+                                 key=f"refval_{i+1}", label_visibility="visible")
+            ref_inputs.append(v)
+        for i, col in enumerate(ref_cols_b):
+            v = col.number_input(f"Ref. {i+6}", value=0.0, step=0.000001, format="%.6f",
+                                 key=f"refval_{i+6}", label_visibility="visible")
+            ref_inputs.append(v)
+
+        # ──────────────────────────────────────────────────────────────
         observations = st.text_area("📝 Observaciones", placeholder="Condiciones de calibración, notas relevantes...")
 
         submitted = st.form_submit_button("💾 Guardar Calibración", use_container_width=True, type="primary")
@@ -47,6 +85,9 @@ def render_calibration_form(instrument_id: str, instrument_uuid: str):
             if not technician:
                 st.error("❌ El técnico calibrador es obligatorio.")
                 return
+
+            # Filtrar valores de referencia: solo los distintos de 0
+            reference_values_list = [round(v, 6) for v in ref_inputs if v != 0.0]
 
             cal_data = {
                 "instrument_id": instrument_uuid,
@@ -59,10 +100,15 @@ def render_calibration_form(instrument_id: str, instrument_uuid: str):
                 "result": result,
                 "cost": float(cost) if cost else None,
                 "tolerance": tolerance,
-                "measured_value": float(measured_value) if measured_value else None,
-                "reference_value": float(reference_value) if reference_value else None,
-                "uncertainty": float(uncertainty) if uncertainty else None,
+                "measured_value": round(float(measured_value), 6) if measured_value else None,
+                "reference_value": round(float(reference_value), 6) if reference_value else None,
+                "uncertainty": round(float(uncertainty), 6) if uncertainty else None,
                 "observations": observations,
+                # Nuevos campos
+                "control_nominal": round(float(control_nominal), 6) if control_nominal != 0.0 else None,
+                "control_ucl":    round(float(control_ucl), 6)    if control_ucl != 0.0    else None,
+                "control_lcl":    round(float(control_lcl), 6)    if control_lcl != 0.0    else None,
+                "reference_values": reference_values_list if reference_values_list else None,
             }
 
             if add_calibration(cal_data):
@@ -71,6 +117,8 @@ def render_calibration_form(instrument_id: str, instrument_uuid: str):
                 st.rerun()
             else:
                 st.error("❌ Error al guardar la calibración.")
+
+
 
 
 def render_calibration_history(gage_id: str):
@@ -311,6 +359,7 @@ def render_calibrations():
 
 if __name__ == "__main__":
     render_calibrations()
+
 
 
 
