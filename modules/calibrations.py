@@ -171,6 +171,7 @@ def render_calibration_history(gage_id: str):
                     st.success("✅ Registro eliminado.")
                     st.rerun()
 
+
 def render_msa_quick_access(gage_id: str):
     """Quick access buttons to MSA studies for this instrument"""
     st.markdown("#### 🔬 Estudios MSA Relacionados")
@@ -191,6 +192,8 @@ def render_msa_quick_access(gage_id: str):
                 if st.button(f"Ver {etype}", key=f"msa_{study['id']}"):
                     st.session_state.current_page = "MSA"
                     st.session_state.msa_gage_filter = gage_id
+                    # Fix 5: indicar qué tab abrir en MSA
+                    st.session_state.msa_tab = etype
                     st.rerun()
 
     col1, col2 = st.columns(2)
@@ -308,5 +311,6 @@ def render_calibrations():
 
 if __name__ == "__main__":
     render_calibrations()
+
 
 
