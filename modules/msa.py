@@ -636,59 +636,145 @@ def render_kappa_tab():
     with col2: n_appraisers= st.number_input("Evaluadores", 2,  5,  3, key="k_apps")
     with col3: n_trials    = st.number_input("Ensayos",     1,  3,  2, key="k_trials")
 
+    # Allow user to edit evaluator names
+    appraiser_names = []
+    for i in range(n_appraisers):
+        appraiser_names.append(st.text_input(f"Nombre Evaluador {i+1}", value=f"Evaluador {i+1}", key=f"app_name_{i}"))
+
     attribute_options = ["Pass","Fail"]
     rows = []
     for p in range(1, n_parts+1):
         row = {"Parte": f"P{p:02d}", "Referencia": "Pass"}
-        for a in range(1, n_appraisers+1):
+        for a_idx, app_name in enumerate(appraiser_names):
             for t in range(1, n_trials+1):
-                row[f"E{a}_T{t}"] = "Pass"
+                row[f"{app_name}_T{t}"] = "Pass"
         rows.append(row)
 
     col_cfg = {"Referencia": st.column_config.SelectboxColumn("Referencia", options=attribute_options)}
-    for a in range(1, n_appraisers+1):
+    for app_name in appraiser_names:
         for t in range(1, n_trials+1):
-            col_cfg[f"E{a}_T{t}"] = st.column_config.SelectboxColumn(f"Eval{a} T{t}", options=attribute_options)
+            col_cfg[f"{app_name}_T{t}"] = st.column_config.SelectboxColumn(f"{app_name} T{t}", options=attribute_options)
 
     df_kappa = st.data_editor(pd.DataFrame(rows), use_container_width=True, column_config=col_cfg)
 
     if st.button("🔬 Calcular Kappa", type="primary", key="kappa_analyze"):
         from sklearn.metrics import cohen_kappa_score
-        ref = df_kappa["Referencia"].values
-        kappas = {}; agreements = {}
-        for a in range(1, n_appraisers+1):
-            col = f"E{a}_T1"
-            vals = df_kappa[col].values if col in df_kappa.columns else ref
-            try:   k = cohen_kappa_score(ref, vals)
-            except: k = float("nan")
-            kappas[f"Evaluador {a}"] = round(k, 4)
-            agreements[f"Evaluador {a}"] = round((vals==ref).mean()*100, 2)
+        from collections import Counter
 
-        st.session_state["kappa_results"] = {"kappas": kappas, "agreements": agreements}
+        ref = df_kappa["Referencia"].values
+        kappas = {}; agreements = {}; global_errors = {}
+        appraiser_modes = {} # To store the mode of each appraiser's trials for each part
+
+        # Calculate mode for each appraiser for each part
+        for app_name in appraiser_names:
+            appraiser_modes[app_name] = []
+            for p_idx in range(n_parts):
+                trials_for_part = [df_kappa.loc[p_idx, f"{app_name}_T{t}"] for t in range(1, n_trials + 1) if f"{app_name}_T{t}" in df_kappa.columns]
+                if trials_for_part:
+                    # Get the most common value, if ties, pick the first one
+                    mode_val = Counter(trials_for_part).most_common(1)[0][0]
+                    appraiser_modes[app_name].append(mode_val)
+                else:
+                    appraiser_modes[app_name].append(None) # Should not happen if n_trials > 0
+
+        # Kappa vs Reference (using mode of trials)
+        for app_name in appraiser_names:
+            app_vals = np.array(appraiser_modes[app_name])
+            try:
+                k = cohen_kappa_score(ref, app_vals)
+            except ValueError: # Handle cases where all values are the same
+                k = 1.0 if np.all(ref == app_vals) else 0.0
+            kappas[app_name] = round(k, 4)
+            agreements[app_name] = round((app_vals == ref).mean() * 100, 2)
+
+            # Calculate global errors for each appraiser vs reference
+            correct_classifications = np.sum(app_vals == ref)
+            total_classifications = len(ref)
+            effectiveness = correct_classifications / total_classifications
+
+            miss_rate = np.sum((app_vals == "Fail") & (ref == "Pass")) / np.sum(ref == "Pass") if np.sum(ref == "Pass") > 0 else 0
+            false_alarm_rate = np.sum((app_vals == "Pass") & (ref == "Fail")) / np.sum(ref == "Fail") if np.sum(ref == "Fail") > 0 else 0
+            bias_rate = np.sum(app_vals == "Pass") / total_classifications - np.sum(ref == "Pass") / total_classifications
+
+            global_errors[app_name] = {
+                "Efectividad": round(effectiveness * 100, 2),
+                "Tasa de Fallo": round(miss_rate * 100, 2),
+                "Tasa Falsa Alarma": round(false_alarm_rate * 100, 2),
+                "Sesgo": round(bias_rate * 100, 2)
+            }
+
+        # Kappa between appraisers
+        inter_appraiser_kappas = {}
+        for i in range(len(appraiser_names)):
+            for j in range(i + 1, len(appraiser_names)):
+                app1_name = appraiser_names[i]
+                app2_name = appraiser_names[j]
+                app1_vals = np.array(appraiser_modes[app1_name])
+                app2_vals = np.array(appraiser_modes[app2_name])
+                try:
+                    k = cohen_kappa_score(app1_vals, app2_vals)
+                except ValueError:
+                    k = 1.0 if np.all(app1_vals == app2_vals) else 0.0
+                inter_appraiser_kappas[f"{app1_name} vs {app2_name}"] = round(k, 4)
+
+
+        st.session_state["kappa_results"] = {
+            "kappas": kappas,
+            "agreements": agreements,
+            "inter_appraiser_kappas": inter_appraiser_kappas,
+            "global_errors": global_errors,
+        }
         st.session_state["kappa_df_val"]      = df_kappa.copy()
         st.session_state["kappa_gage_id_val"]    = gage_id
         st.session_state["kappa_uuid_val"]    = inst_uuid
         st.session_state["kappa_napp_val"]    = n_appraisers
         st.session_state["kappa_ntr_val"]      = n_trials
+        st.session_state["kappa_app_names"] = appraiser_names
 
     if "kappa_results" in st.session_state:
         r = st.session_state["kappa_results"]
-        kappas = r["kappas"]; agreements = r["agreements"]
+        kappas = r["kappas"]
+        agreements = r["agreements"]
+        inter_appraiser_kappas = r["inter_appraiser_kappas"]
+        global_errors = r["global_errors"]
+        appraiser_names = st.session_state["kappa_app_names"]
 
         def kappa_status(k):
             if k > 0.9: return "✅ Excelente"
             elif k > 0.7: return "🟡 Aceptable"
             else: return "❌ Inaceptable"
 
-        kappa_df = pd.DataFrame({"Evaluador": list(kappas.keys()), "Kappa": list(kappas.values()), "% Acuerdo vs Ref": list(agreements.values()), "Evaluación": [kappa_status(v) for v in kappas.values()]})
+        st.markdown("### Kappa vs Referencia")
+        kappa_df = pd.DataFrame({
+            "Evaluador": list(kappas.keys()),
+            "Kappa": list(kappas.values()),
+            "% Acuerdo vs Ref": list(agreements.values()),
+            "Evaluación": [kappa_status(v) for v in kappas.values()]
+        })
         st.dataframe(kappa_df, use_container_width=True, hide_index=True)
 
-        fig = px.bar(kappa_df, x="Evaluador", y="Kappa", color="Kappa", color_continuous_scale=["red","orange","green"], range_color=[0,1], text="Kappa", title="Kappa de Cohen por Evaluador")
-        fig.add_hline(y=0.9, line_dash="dash", line_color="green")
-        fig.add_hline(y=0.7, line_dash="dash", line_color="orange")
+        fig = px.bar(kappa_df, x="Evaluador", y="Kappa", color="Kappa", color_continuous_scale=["red","orange","green"], range_color=[0,1], text="Kappa", title="Kappa de Cohen por Evaluador vs Referencia")
+        fig.add_hline(y=0.9, line_dash="dash", line_color="green", annotation_text="Excelente (>0.9)")
+        fig.add_hline(y=0.7, line_dash="dash", line_color="orange", annotation_text="Aceptable (>0.7)")
         fig.update_traces(texttemplate="%{text:.3f}", textposition="outside")
-        fig.update_layout(height=380)
+        fig.update_layout(height=420)
         st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### Kappa entre Evaluadores")
+        if inter_appraiser_kappas:
+            inter_kappa_df = pd.DataFrame({
+                "Comparación": list(inter_appraiser_kappas.keys()),
+                "Kappa": list(inter_appraiser_kappas.values()),
+                "Evaluación": [kappa_status(v) for v in inter_appraiser_kappas.values()]
+            })
+            st.dataframe(inter_kappa_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Se necesitan al menos dos evaluadores para calcular Kappa entre ellos.")
+
+        st.markdown("### Tabla de Errores Globales (MSA 4ª Edición)")
+        global_errors_df = pd.DataFrame.from_dict(global_errors, orient='index')
+        global_errors_df.index.name = "Evaluador"
+        st.dataframe(global_errors_df.style.format("{:.2f}%"), use_container_width=True)
 
         st.markdown("---")
         meta = _study_meta_form("Kappa", st.session_state.get("kappa_gage_id_val", "N/A"),
@@ -696,17 +782,30 @@ def render_kappa_tab():
         n_app  = st.session_state.get("kappa_napp_val", 1)
         n_tr   = st.session_state.get("kappa_ntr_val", 1)
         df_k   = st.session_state.get("kappa_df_val", pd.DataFrame())
+        appraiser_names_saved = st.session_state.get("kappa_app_names", [])
+
         records = []
         for _,row in df_k.iterrows():
-            for a in range(1, n_app+1):
+            for a_idx, app_name in enumerate(appraiser_names_saved):
                 for t in range(1, n_tr+1):
-                    col = f"E{a}_T{t}"
+                    col = f"{app_name}_T{t}"
                     if col in row:
                         records.append({"study_id":"__PH__","part_id":str(row["Parte"]),
-                                        "appraiser":f"Evaluador {a}","trial":t,
+                                        "appraiser":app_name,"trial":t,
                                         "result":str(row[col]),
                                         "reference_result":str(row["Referencia"])})
-        _save_and_pdf_row(meta, kappas, "Kappa", "gt_msa_kappa_data", records, "kappa")
+
+        # Prepare flat_r for saving, including kappas and global errors
+        flat_r = {}
+        for app_name, k_val in kappas.items():
+            flat_r[f"kappa_{app_name.replace(' ', '_')}"] = k_val
+        for comp, k_val in inter_appraiser_kappas.items():
+            flat_r[f"kappa_inter_{comp.replace(' ', '_').replace('vs', 'vs')}"] = k_val
+        for app_name, errors in global_errors.items():
+            for error_type, value in errors.items():
+                flat_r[f"error_{app_name.replace(' ', '_')}_{error_type.replace(' ', '_')}"] = value / 100 # Save as proportion
+
+        _save_and_pdf_row(meta, flat_r, "Kappa", "gt_msa_kappa_data", records, "kappa")
 
 
 # ─────────────────────────────────────────────
